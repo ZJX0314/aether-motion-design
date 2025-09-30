@@ -170,9 +170,9 @@
         /* 核心修改：模块切换样式 - 移除 justify-content，改用 HTML 响应式类 */
         .app-section {
             display: none; 
-            /* 紧凑布局：模块内容高度自适应，留出页头和页脚空间 */
-            padding-top: 4rem; /* 手机端顶部起始填充 */
-            padding-bottom: 2rem; /* 底部填充 */
+            /* 关键修复：增加 padding-top 到 5rem (80px)，提供安全缓冲 */
+            padding-top: 5rem; 
+            padding-bottom: 2rem; 
             opacity: 0;
             transform: translateY(20px);
             transition: opacity 0.5s ease-out, transform 0.5s ease-out;
@@ -256,7 +256,8 @@
         <!-- 英雄区域 (Hero Section) -->
         <!-- 优化：在移动端，将 Flex-row 改为 Stacked column -->
         <section id="hero" class="app-section active min-h-screen flex items-center pb-12">
-            <div class="container flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left">
+            <!-- 关键修复：添加 pt-16 md:pt-0，确保移动端内容被推到导航栏下方 -->
+            <div class="container flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left pt-16 md:pt-0">
                 <!-- 文字内容 -->
                 <!-- 优化：移除 max-w-xl，让其在移动端占据更多宽度 -->
                 <div class="space-y-6 glass-card p-6 md:p-12 w-full md:max-w-xl">
