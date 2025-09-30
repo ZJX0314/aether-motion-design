@@ -11,195 +11,29 @@
     <!-- 引入 Google Fonts: Poppins (英文) 和 Noto Sans SC (中文) -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;700&family=Poppins:wght==400;600;700&display=swap" rel="stylesheet">
     
-    <!-- 引入 Firebase SDKs -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { 
-            getAuth, 
-            signInAnonymously, // 重新引入匿名登录
-            signInWithCustomToken, // 重新引入 Custom Token 登录
-            onAuthStateChanged 
-        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { 
-            getFirestore, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp 
-        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        
-        // 全局变量，用于 Firestore 和 Auth
-        window.firebaseApp = null;
-        window.db = null;
-        window.auth = null;
-        window.userId = null;
-        window.isAuthReady = false;
-
-        // 访问画布环境变量 (MANDATORY)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // 恢复使用 Custom Token
-
-        /**
-         * 初始化 Firebase 应用、认证和 Firestore
-         */
-        async function initializeFirebase() {
-            try {
-                // 启用调试日志
-                setLogLevel('Debug'); 
-                
-                // 1. 初始化 App
-                firebaseApp = initializeApp(firebaseConfig);
-                db = getFirestore(firebaseApp);
-                auth = getAuth(firebaseApp);
-                
-                // 2. 尝试自动登录（Custom Token 优先，匿名登录兜底）
-                try {
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
+    <!-- 性能优化：将 Tailwind 配置移到这里，只执行一次 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'var-primary': 'var(--color-primary)',
+                        'var-accent': 'var(--color-accent)',
+                    },
+                    animation: {
+                        'fade-in-up': 'fadeInUp 0.4s ease-out forwards',
+                    },
+                    keyframes: {
+                        fadeInUp: {
+                            '0%': { opacity: 0, transform: 'translateY(20px)' },
+                            '100%': { opacity: 1, transform: 'translateY(0)' },
+                        }
                     }
-                } catch (error) {
-                    console.error("Firebase Automatic Auth failed:", error);
-                    // 如果自动登录失败，设置一个临时 ID，但数据将无法同步
-                    userId = crypto.randomUUID(); 
                 }
-
-                // 3. 设置认证状态监听器 (现在用于 UI 更新)
-                onAuthStateChanged(auth, (user) => {
-                    handleAuthStatus(user); 
-                    window.isAuthReady = true;
-                });
-
-            } catch (error) {
-                console.error("Firebase Initialization Failed:", error);
             }
         }
-
-        /**
-         * 根据用户认证状态更新 Journal UI
-         * @param {Object} user - Firebase User Object 或 null
-         */
-        function handleAuthStatus(user) {
-            const currentUserIdEl = document.getElementById('current-user-id');
-            const authMessageEl = document.getElementById('auth-message');
-            
-            if (user) { 
-                // 已登录 (通过 Custom Token 或匿名)
-                userId = user.uid;
-                // --- 修改: 笔记现在是公开的 ---
-                currentUserIdEl.textContent = userId;
-                authMessageEl.textContent = '已自动登录。此笔记所有人可见，但只有您能编辑。';
-                authMessageEl.className = 'text-green-400 mb-4';
-                loadNotes(); // 登录后加载笔记
-
-            } else {
-                // 未登录 (只有在初始认证失败时发生)
-                userId = 'N/A';
-                currentUserIdEl.textContent = '认证失败或未初始化。';
-                authMessageEl.textContent = '警告：身份认证失败，笔记功能不可用。';
-                authMessageEl.className = 'text-red-400 mb-4';
-            }
-        }
-
-        /**
-         * 笔记数据存储路径
-         */
-        function getNotesCollectionRef() {
-            if (!db) return null;
-            // --- 关键修改: 存储在公共路径下 ---
-            // 路径: /artifacts/{appId}/public/data/daily_notes
-            return collection(db, `artifacts/${appId}/public/data/daily_notes`);
-        }
-        
-        /**
-         * 实时加载并渲染笔记
-         */
-        function loadNotes() {
-            const notesRef = getNotesCollectionRef();
-            const notesListEl = document.getElementById('notes-list');
-            
-            if (!notesRef) {
-                notesListEl.innerHTML = `<p class="text-red-400">无法加载笔记：身份认证未就绪。</p>`;
-                return;
-            }
-            
-            // 查询：按时间戳倒序排列
-            const q = query(notesRef, orderBy('timestamp', 'desc'));
-
-            onSnapshot(q, (snapshot) => {
-                const notesList = [];
-                snapshot.forEach((doc) => {
-                    notesList.push({ id: doc.id, ...doc.data() });
-                });
-                renderNotes(notesList);
-            }, (error) => {
-                console.error("Error fetching notes:", error);
-                notesListEl.innerHTML = `<p class="text-red-400">无法加载笔记：${error.message}</p>`;
-            });
-        }
-        
-        /**
-         * 渲染笔记列表
-         * @param {Array} notes - 笔记数组
-         */
-        function renderNotes(notes) {
-            const notesListEl = document.getElementById('notes-list');
-            notesListEl.innerHTML = ''; 
-
-            if (notes.length === 0) {
-                notesListEl.innerHTML = `<p class="text-center opacity-60 p-4">还没有任何笔记。写下您的第一个设计灵感吧！</p>`;
-                return;
-            }
-
-            notes.forEach(note => {
-                const date = note.timestamp?.toDate ? note.timestamp.toDate().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '未知日期';
-                const time = note.timestamp?.toDate ? note.timestamp.toDate().toLocaleTimeString('zh-CN') : '';
-                
-                const noteEl = document.createElement('div');
-                noteEl.className = 'glass-card p-4 mb-4 border-l-4 border-var(--color-accent) transition hover:shadow-lg';
-                noteEl.innerHTML = `
-                    <p class="text-sm font-light opacity-70 mb-2">${date} ${time}</p>
-                    <p class="whitespace-pre-wrap">${note.content}</p>
-                `;
-                notesListEl.appendChild(noteEl);
-            });
-        }
-        
-        /**
-         * 提交新笔记 (仍然需要 owner 认证)
-         */
-        window.submitNote = async function() {
-            const noteInput = document.getElementById('note-input');
-            const noteContent = noteInput.value.trim();
-            
-            if (!noteContent) return;
-            // 确保只有认证成功的 owner 才能提交（通过 userId 检查）
-            if (!window.isAuthReady || !db || !userId || userId === 'N/A') {
-                console.error("Database not ready or user not authenticated.");
-                // 提示用户必须是 owner 才能编辑
-                alert('警告：此笔记为作者专用编辑区。');
-                return;
-            }
-
-            try {
-                const notesRef = getNotesCollectionRef();
-                
-                await addDoc(notesRef, {
-                    content: noteContent,
-                    timestamp: serverTimestamp() // 使用服务器时间戳
-                });
-                
-                noteInput.value = ''; // 清空输入框
-            } catch (error) {
-                console.error("Error adding document:", error);
-                alert(`笔记提交失败：${error.message}`);
-            }
-        };
-
-        // 移除 signInUser, signUpUser, signOutUser 函数
-        
-        window.addEventListener('DOMContentLoaded', initializeFirebase);
-        
     </script>
+
     <style>
         /* CSS 变量定义 - 实现主题切换 */
         :root {
@@ -235,6 +69,12 @@
             background-color: var(--color-bg);
             transition: background-color 0.5s, color 0.5s;
             overflow-x: hidden;
+            height: 100vh; /* 优化：确保body至少占据整个视口 */
+        }
+
+        /* 关键：禁用主滚动条 */
+        body.no-scroll {
+            overflow-y: hidden !important;
         }
 
         /* 固定背景图片效果 (Parallax) */
@@ -327,51 +167,45 @@
             border-radius: 8px;
         }
 
-        /* 核心修改：模块切换样式 */
+        /* 核心修改：模块切换样式和垂直居中 */
         .app-section {
-            /* 确保所有模块都能在屏幕上占位，但只有当前模块可见 */
             display: none; 
-            min-height: calc(100vh - 64px); /* 减去导航栏高度 */
-            padding-top: 6rem; /* 确保内容不被导航栏遮挡 */
+            /* 紧凑布局：模块内容高度自适应，留出页头和页脚空间 */
+            padding-top: 4.5rem; /* 调整填充，确保标题不被遮挡 */
+            padding-bottom: 2.5rem; /* 调整填充 */
             opacity: 0;
             transform: translateY(20px);
             transition: opacity 0.5s ease-out, transform 0.5s ease-out;
-            padding-bottom: 2rem; /* 确保内容底部有足够的空间 */
+            /* 关键：允许内容在模块内部滚动，但不影响body */
+            overflow-y: auto; 
+            height: calc(100vh - 64px); /* 64px 是导航栏高度 */
+            
+            /* 新增：Flexbox 垂直居中 */
+            display: flex; /* 默认设置为 flex，以便进行垂直布局 */
+            flex-direction: column; 
+            justify-content: center; /* 垂直居中内容 */
+            align-items: center; 
+        }
+
+        /* 英雄区域特殊处理 */
+        #hero {
+            height: 100vh;
+            overflow-y: hidden; /* 英雄区不需要滚动 */
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
         }
 
         .app-section.active {
-            display: block;
+            display: flex; /* 确保激活时是 flex */
             opacity: 1;
             transform: translateY(0);
         }
         
-        /* 合并后的 Profile 模块内部的间距调整 */
-        .profile-sub-section {
-            padding-top: 5rem;
-            padding-bottom: 5rem;
-        }
-        
+        /* 移除冗余的 profile-sub-section 样式 */
         /* 确保页脚在主内容容器内可见 */
         #main-content {
             display: block; /* 保持可见 */
         }
-        
-        /* 笔记区域认证表单的额外样式 - 不再使用 */
-        .auth-input {
-            width: 100%;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            border-radius: 8px;
-            background-color: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            color: var(--color-text);
-            transition: border-color 0.3s;
-        }
-        .auth-input:focus {
-            outline: none;
-            border-color: var(--color-accent);
-        }
-
     </style>
 </head>
 
@@ -385,12 +219,11 @@
 
             <!-- 桌面端菜单 -->
             <div class="hidden md:flex space-x-6 items-center">
-                <!-- 合并为 Profile 模块 -->
-                <a href="#profile" class="nav-link text-lg hover:text-blue-400 transition" data-section="profile" onclick="showSection('profile')">个人档案</a> 
+                <!-- 拆分模块并更新链接 -->
+                <a href="#about" class="nav-link text-lg hover:text-blue-400 transition" data-section="about" onclick="showSection('about')">我的故事</a> 
+                <a href="#skills" class="nav-link text-lg hover:text-blue-400 transition" data-section="skills" onclick="showSection('skills')">动态技能</a> 
                 <a href="#projects" class="nav-link text-lg hover:text-blue-400 transition" data-section="projects" onclick="showSection('projects')">作品集</a>
-                <!-- 删除了教程链接 -->
-                <a href="#journal" class="nav-link text-lg hover:text-blue-400 transition" data-section="journal" onclick="showSection('journal')">每日笔记</a>
-                <!-- 社交媒体链接区域 (Social Media) - 移到 profile 内部 -->
+                <a href="#contact" class="nav-link text-lg hover:text-blue-400 transition" data-section="contact" onclick="showSection('contact')">联系我</a> 
                 <a href="#social" class="nav-link text-lg hover:text-blue-400 transition" data-section="social" onclick="showSection('social')">连接我</a> 
                 <!-- 主题切换按钮 -->
                 <button id="theme-toggle" class="text-xl p-2 rounded-full hover:bg-gray-700 transition" aria-label="切换主题">
@@ -411,11 +244,11 @@
 
         <!-- 移动端下拉菜单 -->
         <div id="mobile-menu" class="hidden md:hidden absolute top-16 left-0 w-full glass-card border-t border-gray-700 py-4 shadow-xl">
-            <!-- 合并为 Profile 模块 -->
-            <a href="#profile" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="profile" onclick="closeMobileMenu(); showSection('profile')">个人档案</a>
+            <!-- 拆分模块并更新链接 -->
+            <a href="#about" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="about" onclick="closeMobileMenu(); showSection('about')">我的故事</a>
+            <a href="#skills" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="skills" onclick="closeMobileMenu(); showSection('skills')">动态技能</a>
             <a href="#projects" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="projects" onclick="closeMobileMenu(); showSection('projects')">作品集</a>
-            <!-- 删除了教程链接 -->
-            <a href="#journal" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="journal" onclick="closeMobileMenu(); showSection('journal')">每日笔记</a>
+            <a href="#contact" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="contact" onclick="closeMobileMenu(); showSection('contact')">联系我</a>
             <a href="#social" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="social" onclick="closeMobileMenu(); showSection('social')">连接我</a>
         </div>
     </header>
@@ -436,8 +269,8 @@
                     <div class="flex flex-col sm:flex-row justify-center md:justify-start gap-4 pt-4">
                         <!-- 更改为切换到 projects 模块 -->
                         <button class="btn-primary" onclick="showSection('projects')">观看我的作品集 <i class="fas fa-film ml-2"></i></button>
-                        <!-- 更改为切换到 profile 模块 -->
-                        <button class="btn-primary !bg-transparent border border-var(--color-primary) text-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white hover:border-transparent" style="color: var(--color-primary); border-color: var(--color-primary);" onmouseover="this.style.setProperty('color', 'white', 'important'); this.style.setProperty('border-color', 'transparent', 'important');" onmouseout="this.style.setProperty('color', 'var(--color-primary)', 'important'); this.style.setProperty('border-color', 'var(--color-primary)', 'important');" onclick="showSection('profile')">查看个人档案 <i class="fas fa-user-circle ml-2"></i></button>
+                        <!-- 更改为切换到 about 模块 -->
+                        <button class="btn-primary !bg-transparent border border-var(--color-primary) text-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white hover:border-transparent" style="color: var(--color-primary); border-color: var(--color-primary);" onmouseover="this.style.setProperty('color', 'white', 'important'); this.style.setProperty('border-color', 'transparent', 'important');" onmouseout="this.style.setProperty('color', 'var(--color-primary)', 'important'); this.style.setProperty('border-color', 'var(--color-primary)', 'important');" onclick="showSection('about')">了解我的故事 <i class="fas fa-user-circle ml-2"></i></button>
                     </div>
                 </div>
 
@@ -448,14 +281,13 @@
             </div>
         </section>
 
-        <!-- 新模块：个人档案 (Profile) - 整合 About, Skills, Contact -->
-        <section id="profile" class="app-section">
+        <!-- 模块 1: 我的故事 (About) - 独立模块 -->
+        <section id="about" class="app-section">
             <div class="container">
-                <h2 class="text-4xl font-bold text-center mb-12">个人档案 & 联系方式</h2>
+                <h2 class="text-4xl font-bold text-center mb-8">我的故事 & 创作历程</h2>
                 
                 <!-- 1. 关于我区域 (About Section Content) -->
-                <div id="about-content" class="profile-sub-section border-b border-gray-700/50">
-                    <h3 class="text-3xl font-bold text-center mb-10 border-b-2 inline-block pb-1" style="border-color: var(--color-accent);">我的故事</h3>
+                <div id="about-content" class="py-4">
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
                         <!-- 个人介绍 -->
                         <div class="lg:col-span-1 glass-card p-8">
@@ -469,6 +301,12 @@
                             <p class="opacity-90">
                                 在业余时间，我喜欢研究电影制作技巧、尝试 VJ 视觉，并探索生成艺术的可能性。
                             </p>
+                            <h4 class="text-2xl font-semibold mb-4 border-b pb-2 mt-6" style="border-color: var(--color-primary-dark);">我的兴趣</h4>
+                            <div class="flex flex-wrap gap-3">
+                                <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 3D 渲染艺术</span>
+                                <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 声音设计</span>
+                                <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 视觉编程 (TouchDesigner)</span>
+                            </div>
                         </div>
 
                         <!-- 时间线 -->
@@ -496,23 +334,17 @@
                             </div>
                         </div>
                     </div>
-
-                    <!-- 兴趣标签 -->
-                    <div class="glass-card p-8 mt-10">
-                        <h4 class="text-2xl font-semibold mb-4 border-b pb-2" style="border-color: var(--color-primary-dark);">我的兴趣</h4>
-                        <div class="flex flex-wrap gap-3">
-                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 3D 渲染艺术</span>
-                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 声音设计</span>
-                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 视觉编程 (TouchDesigner)</span>
-                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 电影叙事</span>
-                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 生成艺术</span>
-                        </div>
-                    </div>
                 </div>
+            </div>
+        </section>
 
-                <!-- 2. 动态技能区域 (Skills Section Content) -->
-                <div id="skills-content" class="profile-sub-section border-b border-gray-700/50">
-                    <h3 class="text-4xl font-bold text-center mb-10 border-b-2 inline-block pb-1" style="border-color: var(--color-accent);">动态设计工具与技能</h3>
+
+        <!-- 模块 2: 动态技能 (Skills) - 独立模块 -->
+        <section id="skills" class="app-section">
+            <div class="container">
+                <h2 class="text-4xl font-bold text-center mb-10">动态设计工具与技能</h2>
+                
+                <div id="skills-content" class="py-4">
                     <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
                         <!-- 技能图标卡片：动态软件 -->
                         <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
@@ -528,61 +360,31 @@
                             <p class="font-semibold">Premiere Pro (PP)</p>
                         </div>
                         
-                        <!-- 保留 Illustrator (虽然未圈选，但它是设计流程的一部分，此处我根据圈选明确删除) -->
-                        <!-- 删除了 Illustrator -->
-
                         <!-- 技能图标卡片：设计能力 -->
                         <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
                             <i class="fas fa-lightbulb text-5xl mb-3" style="color: #339933;"></i>
                             <p class="font-semibold">运动原理</p>
                         </div>
-                        <!-- 删除了 动态分镜 -->
-                        <!-- 删除了 声音同步 -->
-                        <!-- 删除了 VFX/视觉特效 -->
-                        <!-- 删除了 表达式/脚本 -->
                         
                         <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
                             <i class="fas fa-palette text-5xl mb-3" style="color: #007bff;"></i>
                             <p class="font-semibold">视觉艺术</p>
                         </div>
-                        <!-- 删除了 Pipeline 管理 -->
-                        <!-- 删除了 UI 动效 -->
                     </div>
                 </div>
-
-                <!-- 3. 联系我区域 (Contact Section Content) -->
-                <div id="contact-content" class="profile-sub-section">
-                    <h3 class="text-4xl font-bold text-center mb-10 border-b-2 inline-block pb-1" style="border-color: var(--color-accent);">期待合作与交流</h3>
-                    <p class="text-xl max-w-2xl mx-auto mb-10 opacity-80 text-center">
-                        无论是新的动态项目、VFX 咨询，还是关于艺术的讨论，欢迎随时联系！
-                    </p>
-
-                    <div class="flex flex-wrap justify-center gap-6">
-                        <!-- 邮件 -->
-                        <a href="mailto:aether.motion@example.com" class="btn-primary flex items-center gap-2 text-lg">
-                            <i class="fas fa-envelope"></i> 邮件联系
-                        </a>
-                        <!-- 微信 (模态框触发) -->
-                        <button class="btn-primary flex items-center gap-2 text-lg !bg-green-600 hover:!bg-green-700" onclick="openModal('wechatModal')">
-                            <i class="fab fa-weixin"></i> 微信扫码
-                        </button>
-                        <!-- QQ (模态框触发) -->
-                        <button class="btn-primary flex items-center gap-2 text-lg !bg-blue-800 hover:!bg-blue-900" onclick="openModal('qqModal')">
-                            <i class="fab fa-qq"></i> QQ 交流
-                        </button>
-                    </div>
-                </div>
-
             </div>
         </section>
 
-        <!-- 项目展示区域 (Projects Section) -->
+
+        <!-- 模块 3: 作品展示区域 (Projects Section) - 独立模块 -->
         <section id="projects" class="app-section">
             <div class="container">
-                <h2 class="text-4xl font-bold text-center mb-12">动态设计作品集</h2>
+                <!-- 调整标题下方间距 -->
+                <h2 class="text-4xl font-bold text-center mb-8">动态设计作品集</h2>
 
                 <!-- 分类过滤按钮 -->
-                <div class="glass-card p-4 mb-8 flex flex-wrap justify-center gap-4">
+                <!-- 调整 p-4 到 p-3，mb-8 到 mb-6 -->
+                <div class="glass-card p-3 mb-6 flex flex-wrap justify-center gap-4">
                     <button class="filter-btn btn-primary" data-filter="all">全部</button>
                     <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="2d_motion">2D 动画</button>
                     <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="3d_render">3D 渲染</button>
@@ -642,10 +444,37 @@
             </div>
         </section>
         
-        <!-- 社交媒体链接区域 (Social Media) - 保持独立，方便导航和 footer 放置 -->
+        <!-- 模块 4: 联系我 (Contact) - 独立模块 (QR Codes) -->
+        <section id="contact" class="app-section">
+            <div class="container">
+                <h2 class="text-4xl font-bold text-center mb-10">联系我 (合作与交流)</h2>
+                <p class="text-xl max-w-2xl mx-auto mb-10 opacity-80 text-center">
+                    无论是新的动态项目、VFX 咨询，还是关于艺术的讨论，欢迎随时联系！
+                </p>
+
+                <div class="flex flex-wrap justify-center gap-6">
+                    <!-- 邮件 -->
+                    <a href="mailto:aether.motion@example.com" class="btn-primary flex items-center gap-2 text-lg">
+                        <i class="fas fa-envelope"></i> 邮件联系
+                    </a>
+                    <!-- 微信 (模态框触发) -->
+                    <button class="btn-primary flex items-center gap-2 text-lg !bg-green-600 hover:!bg-green-700" onclick="openModal('wechatModal')">
+                        <i class="fab fa-weixin"></i> 微信扫码
+                    </button>
+                    <!-- QQ (模态框触发) -->
+                    <button class="btn-primary flex items-center gap-2 text-lg !bg-blue-800 hover:!bg-blue-900" onclick="openModal('qqModal')">
+                        <i class="fab fa-qq"></i> QQ 交流
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 模块 5: 社交媒体链接区域 (Social Media) - 独立模块 -->
         <section id="social" class="app-section">
             <div class="container">
-                <h2 class="text-4xl font-bold text-center mb-12">连接我 (社交媒体)</h2>
+                <!-- 调整标题下方间距 -->
+                <h2 class="text-4xl font-bold text-center mb-10">连接我 (社交媒体)</h2>
+                <!-- 调整 p 下方间距 -->
                 <p class="text-center opacity-70 mb-8">在这里找到我的作品分享和专业动态。</p>
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
                     <!-- 社交媒体卡片 1: ArtStation (动态作品集) -->
@@ -676,48 +505,8 @@
             </div>
         </section>
         
-        <!-- 每日笔记区域 (Daily Journal Section) -->
-        <section id="journal" class="app-section">
-            <div class="container">
-                <!-- 标题更新 -->
-                <h2 class="text-4xl font-bold text-center mb-6">每日设计笔记 / 灵感日志 (公开)</h2>
-                <!-- 描述更新 -->
-                <p class="text-center opacity-70 mb-8">记录您的设计灵感、学习总结或日常想法，**所有人可见**。</p>
-
-                <!-- 认证状态信息 -->
-                <p id="auth-message" class="text-center text-yellow-400 mb-4">正在自动登录...</p>
-
-                <!-- 笔记内容区域 (现在是默认显示，并由 JS 更新内容) -->
-                <div id="journal-content">
-                    <div class="glass-card p-8 mb-10">
-                        <div class="flex justify-between items-center mb-4 border-b border-gray-700/50 pb-3">
-                            <h3 class="text-xl font-semibold">记录新笔记 (作者专用编辑区)</h3>
-                        </div>
-
-                        <div class="text-sm opacity-60 mb-4">
-                            您的唯一用户ID：<span id="current-user-id" class="font-mono break-all text-var(--color-accent)">正在认证...</span>
-                        </div>
-                        <textarea id="note-input" class="w-full p-4 glass-card resize-y min-h-[150px] outline-none focus:ring-2 focus:ring-var(--color-primary) mb-4" placeholder="今天有什么新的动态设计灵感或技术突破？"></textarea>
-                        <button class="btn-primary w-full md:w-auto flex items-center justify-center gap-2" onclick="submitNote()">
-                            <i class="fas fa-paper-plane"></i> 提交笔记
-                        </button>
-                    </div>
-
-                    <!-- 笔记列表显示区域 -->
-                    <div class="glass-card p-8">
-                        <h3 class="text-2xl font-semibold mb-6 border-b pb-2" style="border-color: var(--color-primary-dark);">历史记录</h3>
-                        <div id="notes-list" class="space-y-4">
-                            <!-- 笔记将通过 JavaScript 实时加载到这里 -->
-                            <p class="text-center opacity-60 p-4">正在加载笔记...</p>
-                        </div>
-                    </div>
-                </div>
-
-            </div>
-        </section>
-
         <!-- 页脚 (Footer) - 移到主内容容器内 -->
-        <footer class="glass-card !rounded-none mt-12 py-6 border-t border-gray-700">
+        <footer class="glass-card !rounded-none py-4 border-t border-gray-700">
             <div class="container text-center text-sm opacity-70">
                 <p>&copy; 2025 Aether Motion Design. All rights reserved. | 运动赋能视觉叙事。</p>
                 <p class="mt-2">灵感源自优雅设计和高效体验。</p>
@@ -760,38 +549,8 @@
     
     <!-- 引入自定义 JavaScript 脚本 -->
     <script type="module">
-        // 注意：Firebase 相关的初始化和函数已移至顶部的 <script type="module"> 块中。
-
-        // =======================================================
-        // 外部模块导入检查 (防止二次导入)
-        // =======================================================
-        if (typeof window.initializeFirebase === 'undefined') {
-            console.warn("Firebase initialization skipped. Check if Firebase script block is correctly placed.");
-        }
-
-
-        // 确保 Tailwind 的动画类可用
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        'var-primary': 'var(--color-primary)',
-                        'var-accent': 'var(--color-accent)',
-                    },
-                    animation: {
-                        'fade-in-up': 'fadeInUp 0.4s ease-out forwards',
-                    },
-                    keyframes: {
-                        fadeInUp: {
-                            '0%': { opacity: 0, transform: 'translateY(20px)' },
-                            '100%': { opacity: 1, transform: 'translateY(0)' },
-                        }
-                    }
-                }
-            }
-        }
-
         const htmlEl = document.documentElement;
+        const bodyEl = document.body;
         const themeToggle = document.getElementById('theme-toggle');
         const themeToggleMobile = document.getElementById('theme-toggle-mobile');
         const themeIconDesktop = document.getElementById('theme-icon');
@@ -800,14 +559,11 @@
         const mobileMenu = document.getElementById('mobile-menu');
         const filterBtns = document.querySelectorAll('.filter-btn');
         const projectCards = document.querySelectorAll('.project-card');
-        // 更新选择器，只选择新的应用模块
+        // 更新选择器以包含所有单独的模块
         const appSections = document.querySelectorAll('.app-section'); 
 
-        // Video Modal Elements
         const projectVideoModal = document.getElementById('projectVideoModal');
         const videoContainer = document.getElementById('videoContainer');
-        const navLinks = document.querySelectorAll('.nav-link');
-        const mobileNavLinks = document.querySelectorAll('.mobile-nav-link');
 
 
         // =======================================================
@@ -884,21 +640,19 @@
 
         /**
          * 核心功能：显示目标模块，隐藏其他模块。
-         * @param {string} sectionId - 目标模块的 ID (e.g., 'profile', 'projects')
+         * @param {string} sectionId - 目标模块的 ID (e.g., 'about', 'projects')
          */
         window.showSection = function(sectionId) {
             // 1. 隐藏所有模块，并移除 active 类
             appSections.forEach(section => {
                 section.classList.remove('active');
-                // 确保在切换时将页面滚动到顶部
-                window.scrollTo(0, 0); 
             });
 
             // 2. 显示目标模块，并添加 active 类
             const targetSection = document.getElementById(sectionId);
             if (targetSection) {
-                // 先将 display 设置为 block，再通过 transition 动画显示 opacity 和 transform
-                targetSection.style.display = 'block'; 
+                // 关键：将 display 设置为 flex，配合 CSS 实现垂直居中
+                targetSection.style.display = 'flex'; 
                 setTimeout(() => {
                     targetSection.classList.add('active');
                 }, 10);
@@ -912,6 +666,13 @@
                 // 5. 更新 URL hash
                 history.pushState(null, '', `#${sectionId}`);
             }
+
+            // 6. 关键：控制 body 滚动条
+            if (sectionId === 'hero') {
+                bodyEl.classList.remove('no-scroll');
+            } else {
+                bodyEl.classList.add('no-scroll');
+            }
         }
         
         /**
@@ -919,18 +680,22 @@
          * @param {string} currentSectionId - 当前显示的模块 ID
          */
         function updateNavLink(currentSectionId) {
-            // 重新选择所有导航链接，确保它们是最新的
-            const currentNavLinks = document.querySelectorAll('.nav-link, .mobile-nav-link');
+            // 使用更精确的选择器 [data-section]
+            const currentNavLinks = document.querySelectorAll(`[data-section]`);
 
             currentNavLinks.forEach(link => {
                 link.classList.remove('active');
-                // 从 href 获取模块 ID (去除 #)
-                const sectionName = link.getAttribute('href').substring(1);
+                const sectionName = link.getAttribute('data-section');
                 
                 if (sectionName === currentSectionId) {
                     link.classList.add('active');
                 }
             });
+            
+            // 特殊处理：如果回到 hero 页面，则不激活任何导航链接
+            if (currentSectionId === 'hero') {
+                 currentNavLinks.forEach(link => link.classList.remove('active'));
+            }
         }
 
 
@@ -956,9 +721,13 @@
             // 立即显示初始模块
             const initialSection = document.getElementById(initialSectionId);
             if (initialSection) {
-                 initialSection.style.display = 'block';
+                 initialSection.style.display = 'flex'; // 初始化时使用 flex
                  initialSection.classList.add('active');
                  updateNavLink(initialSectionId);
+            }
+            // 初始化时设置body滚动状态
+            if (initialSectionId !== 'hero') {
+                bodyEl.classList.add('no-scroll');
             }
         }
         
@@ -1013,6 +782,7 @@
             modal.classList.remove('hidden');
             // 延迟添加 opacity-100，触发过渡动画
             setTimeout(() => modal.style.opacity = 1, 10);
+            bodyEl.classList.add('no-scroll'); // 锁定背景滚动
         }
 
         /**
@@ -1023,7 +793,13 @@
             const modal = document.getElementById(modalId);
             modal.style.opacity = 0;
             // 延迟隐藏，等待过渡动画完成
-            setTimeout(() => modal.classList.add('hidden'), 300);
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                // 恢复body滚动状态（仅当当前模块内容不需要滚动时）
+                if (document.querySelector('.app-section.active')?.id === 'hero') {
+                    bodyEl.classList.remove('no-scroll');
+                }
+            }, 300);
         }
 
         // 监听点击外部关闭模态框
@@ -1066,6 +842,7 @@
             // 显示模态框
             projectVideoModal.classList.remove('hidden');
             setTimeout(() => projectVideoModal.style.opacity = 1, 10);
+            bodyEl.classList.add('no-scroll'); // 锁定背景滚动
         }
 
         /**
@@ -1077,7 +854,13 @@
             // 清空 iframe，停止视频播放 (关键步骤)
             videoContainer.innerHTML = '';
             
-            setTimeout(() => projectVideoModal.classList.add('hidden'), 300);
+            setTimeout(() => {
+                projectVideoModal.classList.add('hidden');
+                // 恢复body滚动状态（仅当当前模块内容不需要滚动时）
+                if (document.querySelector('.app-section.active')?.id === 'hero') {
+                    bodyEl.classList.remove('no-scroll');
+                }
+            }, 300);
         }
 
         // 监听点击视频模态框外部关闭
