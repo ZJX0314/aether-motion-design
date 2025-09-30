@@ -10,6 +10,196 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
     <!-- 引入 Google Fonts: Poppins (英文) 和 Noto Sans SC (中文) -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;700&family=Poppins:wght==400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- 引入 Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInAnonymously, // 重新引入匿名登录
+            signInWithCustomToken, // 重新引入 Custom Token 登录
+            onAuthStateChanged 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // 全局变量，用于 Firestore 和 Auth
+        window.firebaseApp = null;
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+        window.isAuthReady = false;
+
+        // 访问画布环境变量 (MANDATORY)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // 恢复使用 Custom Token
+
+        /**
+         * 初始化 Firebase 应用、认证和 Firestore
+         */
+        async function initializeFirebase() {
+            try {
+                // 启用调试日志
+                setLogLevel('Debug'); 
+                
+                // 1. 初始化 App
+                firebaseApp = initializeApp(firebaseConfig);
+                db = getFirestore(firebaseApp);
+                auth = getAuth(firebaseApp);
+                
+                // 2. 尝试自动登录（Custom Token 优先，匿名登录兜底）
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Firebase Automatic Auth failed:", error);
+                    // 如果自动登录失败，设置一个临时 ID，但数据将无法同步
+                    userId = crypto.randomUUID(); 
+                }
+
+                // 3. 设置认证状态监听器 (现在用于 UI 更新)
+                onAuthStateChanged(auth, (user) => {
+                    handleAuthStatus(user); 
+                    window.isAuthReady = true;
+                });
+
+            } catch (error) {
+                console.error("Firebase Initialization Failed:", error);
+            }
+        }
+
+        /**
+         * 根据用户认证状态更新 Journal UI
+         * @param {Object} user - Firebase User Object 或 null
+         */
+        function handleAuthStatus(user) {
+            const currentUserIdEl = document.getElementById('current-user-id');
+            const authMessageEl = document.getElementById('auth-message');
+            
+            if (user) { 
+                // 已登录 (通过 Custom Token 或匿名)
+                userId = user.uid;
+                // --- 修改: 笔记现在是公开的 ---
+                currentUserIdEl.textContent = userId;
+                authMessageEl.textContent = '已自动登录。此笔记所有人可见，但只有您能编辑。';
+                authMessageEl.className = 'text-green-400 mb-4';
+                loadNotes(); // 登录后加载笔记
+
+            } else {
+                // 未登录 (只有在初始认证失败时发生)
+                userId = 'N/A';
+                currentUserIdEl.textContent = '认证失败或未初始化。';
+                authMessageEl.textContent = '警告：身份认证失败，笔记功能不可用。';
+                authMessageEl.className = 'text-red-400 mb-4';
+            }
+        }
+
+        /**
+         * 笔记数据存储路径
+         */
+        function getNotesCollectionRef() {
+            if (!db) return null;
+            // --- 关键修改: 存储在公共路径下 ---
+            // 路径: /artifacts/{appId}/public/data/daily_notes
+            return collection(db, `artifacts/${appId}/public/data/daily_notes`);
+        }
+        
+        /**
+         * 实时加载并渲染笔记
+         */
+        function loadNotes() {
+            const notesRef = getNotesCollectionRef();
+            const notesListEl = document.getElementById('notes-list');
+            
+            if (!notesRef) {
+                notesListEl.innerHTML = `<p class="text-red-400">无法加载笔记：身份认证未就绪。</p>`;
+                return;
+            }
+            
+            // 查询：按时间戳倒序排列
+            const q = query(notesRef, orderBy('timestamp', 'desc'));
+
+            onSnapshot(q, (snapshot) => {
+                const notesList = [];
+                snapshot.forEach((doc) => {
+                    notesList.push({ id: doc.id, ...doc.data() });
+                });
+                renderNotes(notesList);
+            }, (error) => {
+                console.error("Error fetching notes:", error);
+                notesListEl.innerHTML = `<p class="text-red-400">无法加载笔记：${error.message}</p>`;
+            });
+        }
+        
+        /**
+         * 渲染笔记列表
+         * @param {Array} notes - 笔记数组
+         */
+        function renderNotes(notes) {
+            const notesListEl = document.getElementById('notes-list');
+            notesListEl.innerHTML = ''; 
+
+            if (notes.length === 0) {
+                notesListEl.innerHTML = `<p class="text-center opacity-60 p-4">还没有任何笔记。写下您的第一个设计灵感吧！</p>`;
+                return;
+            }
+
+            notes.forEach(note => {
+                const date = note.timestamp?.toDate ? note.timestamp.toDate().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '未知日期';
+                const time = note.timestamp?.toDate ? note.timestamp.toDate().toLocaleTimeString('zh-CN') : '';
+                
+                const noteEl = document.createElement('div');
+                noteEl.className = 'glass-card p-4 mb-4 border-l-4 border-var(--color-accent) transition hover:shadow-lg';
+                noteEl.innerHTML = `
+                    <p class="text-sm font-light opacity-70 mb-2">${date} ${time}</p>
+                    <p class="whitespace-pre-wrap">${note.content}</p>
+                `;
+                notesListEl.appendChild(noteEl);
+            });
+        }
+        
+        /**
+         * 提交新笔记 (仍然需要 owner 认证)
+         */
+        window.submitNote = async function() {
+            const noteInput = document.getElementById('note-input');
+            const noteContent = noteInput.value.trim();
+            
+            if (!noteContent) return;
+            // 确保只有认证成功的 owner 才能提交（通过 userId 检查）
+            if (!window.isAuthReady || !db || !userId || userId === 'N/A') {
+                console.error("Database not ready or user not authenticated.");
+                // 提示用户必须是 owner 才能编辑
+                alert('警告：此笔记为作者专用编辑区。');
+                return;
+            }
+
+            try {
+                const notesRef = getNotesCollectionRef();
+                
+                await addDoc(notesRef, {
+                    content: noteContent,
+                    timestamp: serverTimestamp() // 使用服务器时间戳
+                });
+                
+                noteInput.value = ''; // 清空输入框
+            } catch (error) {
+                console.error("Error adding document:", error);
+                alert(`笔记提交失败：${error.message}`);
+            }
+        };
+
+        // 移除 signInUser, signUpUser, signOutUser 函数
+        
+        window.addEventListener('DOMContentLoaded', initializeFirebase);
+        
+    </script>
     <style>
         /* CSS 变量定义 - 实现主题切换 */
         :root {
@@ -44,7 +234,7 @@
             color: var(--color-text);
             background-color: var(--color-bg);
             transition: background-color 0.5s, color 0.5s;
-            scroll-behavior: smooth;
+            overflow-x: hidden;
         }
 
         /* 固定背景图片效果 (Parallax) */
@@ -136,6 +326,52 @@
             position: absolute;
             border-radius: 8px;
         }
+
+        /* 核心修改：模块切换样式 */
+        .app-section {
+            /* 确保所有模块都能在屏幕上占位，但只有当前模块可见 */
+            display: none; 
+            min-height: calc(100vh - 64px); /* 减去导航栏高度 */
+            padding-top: 6rem; /* 确保内容不被导航栏遮挡 */
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 0.5s ease-out, transform 0.5s ease-out;
+            padding-bottom: 2rem; /* 确保内容底部有足够的空间 */
+        }
+
+        .app-section.active {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
+        /* 合并后的 Profile 模块内部的间距调整 */
+        .profile-sub-section {
+            padding-top: 5rem;
+            padding-bottom: 5rem;
+        }
+        
+        /* 确保页脚在主内容容器内可见 */
+        #main-content {
+            display: block; /* 保持可见 */
+        }
+        
+        /* 笔记区域认证表单的额外样式 - 不再使用 */
+        .auth-input {
+            width: 100%;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 8px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: var(--color-text);
+            transition: border-color 0.3s;
+        }
+        .auth-input:focus {
+            outline: none;
+            border-color: var(--color-accent);
+        }
+
     </style>
 </head>
 
@@ -144,14 +380,18 @@
     <!-- 导航栏 - 固定在顶部 -->
     <header class="fixed top-0 left-0 w-full z-50 glass-card !rounded-none">
         <nav class="container flex justify-between items-center h-16 py-3">
-            <a href="#hero" class="text-2xl font-bold font-en text-white px-3 py-1 bg-gradient-to-r from-blue-500 to-blue-700 rounded-lg shadow-lg transition duration-300 hover:scale-105" onclick="smoothScroll(event)">Aether</a>
+            <!-- 更改点击 logo 时的行为，回到 #hero 模块 -->
+            <a href="#hero" class="text-2xl font-bold font-en text-white px-3 py-1 bg-gradient-to-r from-blue-500 to-blue-700 rounded-lg shadow-lg transition duration-300 hover:scale-105" onclick="showSection('hero')">Aether</a>
 
             <!-- 桌面端菜单 -->
             <div class="hidden md:flex space-x-6 items-center">
-                <a href="#about" class="nav-link text-lg hover:text-blue-400 transition" data-section="about" onclick="smoothScroll(event)">关于我</a>
-                <a href="#projects" class="nav-link text-lg hover:text-blue-400 transition" data-section="projects" onclick="smoothScroll(event)">作品集</a>
-                <a href="#skills" class="nav-link text-lg hover:text-blue-400 transition" data-section="skills" onclick="smoothScroll(event)">动态技能</a>
-                <a href="#contact" class="nav-link text-lg hover:text-blue-400 transition" data-section="contact" onclick="smoothScroll(event)">联系我</a>
+                <!-- 合并为 Profile 模块 -->
+                <a href="#profile" class="nav-link text-lg hover:text-blue-400 transition" data-section="profile" onclick="showSection('profile')">个人档案</a> 
+                <a href="#projects" class="nav-link text-lg hover:text-blue-400 transition" data-section="projects" onclick="showSection('projects')">作品集</a>
+                <!-- 删除了教程链接 -->
+                <a href="#journal" class="nav-link text-lg hover:text-blue-400 transition" data-section="journal" onclick="showSection('journal')">每日笔记</a>
+                <!-- 社交媒体链接区域 (Social Media) - 移到 profile 内部 -->
+                <a href="#social" class="nav-link text-lg hover:text-blue-400 transition" data-section="social" onclick="showSection('social')">连接我</a> 
                 <!-- 主题切换按钮 -->
                 <button id="theme-toggle" class="text-xl p-2 rounded-full hover:bg-gray-700 transition" aria-label="切换主题">
                     <i class="fas fa-sun" id="theme-icon"></i>
@@ -171,270 +411,320 @@
 
         <!-- 移动端下拉菜单 -->
         <div id="mobile-menu" class="hidden md:hidden absolute top-16 left-0 w-full glass-card border-t border-gray-700 py-4 shadow-xl">
-            <a href="#about" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="about" onclick="closeMobileMenu(); smoothScroll(event)">关于我</a>
-            <a href="#projects" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="projects" onclick="closeMobileMenu(); smoothScroll(event)">作品集</a>
-            <a href="#skills" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="skills" onclick="closeMobileMenu(); smoothScroll(event)">动态技能</a>
-            <a href="#contact" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="contact" onclick="closeMobileMenu(); smoothScroll(event)">联系我</a>
+            <!-- 合并为 Profile 模块 -->
+            <a href="#profile" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="profile" onclick="closeMobileMenu(); showSection('profile')">个人档案</a>
+            <a href="#projects" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="projects" onclick="closeMobileMenu(); showSection('projects')">作品集</a>
+            <!-- 删除了教程链接 -->
+            <a href="#journal" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="journal" onclick="closeMobileMenu(); showSection('journal')">每日笔记</a>
+            <a href="#social" class="mobile-nav-link block px-4 py-2 text-lg hover:bg-blue-600 transition" data-section="social" onclick="closeMobileMenu(); showSection('social')">连接我</a>
         </div>
     </header>
 
-    <!-- 英雄区域 (Hero Section) -->
-    <section id="hero" class="min-h-screen flex items-center pt-24 pb-12">
-        <div class="container flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left">
-            <!-- 文字内容 -->
-            <div class="max-w-xl space-y-6 glass-card p-8 md:p-12">
-                <p class="text-xl text-var(--color-accent) font-semibold animate-pulse">你好，我是</p>
-                <h1 class="text-6xl md:text-7xl font-bold leading-tight" style="color: var(--color-primary);">Aether</h1>
-                <h2 class="text-3xl font-light">一名致力于视觉叙事的 <span class="font-bold">动态图形艺术家</span></h2>
-                <p class="text-lg leading-relaxed opacity-80">
-                    专注于通过动画、3D 渲染和视觉效果来赋予品牌和故事生命。我坚信运动的力量能创造沉浸式的用户体验。
-                </p>
-                <div class="flex flex-col sm:flex-row justify-center md:justify-start gap-4 pt-4">
-                    <a href="#projects" class="btn-primary" onclick="smoothScroll(event)">观看我的作品集 <i class="fas fa-film ml-2"></i></a>
-                    <a href="#contact" class="btn-primary !bg-transparent border border-var(--color-primary) text-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white hover:border-transparent" style="color: var(--color-primary); border-color: var(--color-primary);" onmouseover="this.style.setProperty('color', 'white', 'important'); this.style.setProperty('border-color', 'transparent', 'important');" onmouseout="this.style.setProperty('color', 'var(--color-primary)', 'important'); this.style.setProperty('border-color', 'var(--color-primary)', 'important');" onclick="smoothScroll(event)">获取联系方式 <i class="fas fa-handshake ml-2"></i></a>
-                </div>
-            </div>
-
-            <!-- 个人头像 -->
-            <div class="w-64 h-64 md:w-80 md:h-80 relative flex-shrink-0">
-                <img src="https://placehold.co/320x320/007bff/ffffff?text=Aether+Motion+Designer" alt="Aether 个人头像" class="glass-card w-full h-full object-cover rounded-full p-2 shadow-2xl transition duration-500 hover:scale-105 border-4 border-var(--color-primary)">
-            </div>
-        </div>
-    </section>
-
-    <!-- 关于我区域 (About Section) -->
-    <section id="about" class="py-20">
-        <div class="container">
-            <h2 class="text-4xl font-bold text-center mb-12">关于我</h2>
-
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
-                <!-- 个人介绍 -->
-                <div class="lg:col-span-1 glass-card p-8">
-                    <h3 class="text-2xl font-semibold mb-4 border-b pb-2" style="border-color: var(--color-primary-dark);">设计理念</h3>
-                    <p class="mb-4 opacity-90">
-                        我专注于将复杂的想法通过**动态图形**转化为清晰、引人入胜的视觉体验。从概念草图到最终渲染，我掌控每一个运动细节。
+    <!-- 主内容容器 - 所有模块都放入这里 -->
+    <main id="main-content">
+        <!-- 英雄区域 (Hero Section) -->
+        <section id="hero" class="app-section active min-h-screen flex items-center pb-12">
+            <div class="container flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left">
+                <!-- 文字内容 -->
+                <div class="max-w-xl space-y-6 glass-card p-8 md:p-12">
+                    <p class="text-xl text-var(--color-accent) font-semibold animate-pulse">你好，我是</p>
+                    <h1 class="text-6xl md:text-7xl font-bold leading-tight" style="color: var(--color-primary);">Aether</h1>
+                    <h2 class="text-3xl font-light">一名致力于视觉叙事的 <span class="font-bold">动态图形艺术家</span></h2>
+                    <p class="text-lg leading-relaxed opacity-80">
+                        专注于通过动画、3D 渲染和视觉效果来赋予品牌和故事生命。我坚信运动的力量能创造沉浸式的用户体验。
                     </p>
-                    <p class="mb-4 opacity-90">
-                        我的工作流程结合了传统动画原则和最新的 3D 渲染技术，为电影、广告和数字产品提供高质量的动态视觉解决方案。
-                    </p>
-                    <p class="opacity-90">
-                        在业余时间，我喜欢研究电影制作技巧、尝试 VJ 视觉，并探索生成艺术的可能性。
-                    </p>
-                </div>
-
-                <!-- 时间线 -->
-                <div class="lg:col-span-2 glass-card p-8">
-                    <h3 class="text-2xl font-semibold mb-6 border-b pb-2" style="border-color: var(--color-primary-dark);">创作历程 (时间线)</h3>
-                    <div class="relative pl-6 border-l-2 border-var(--color-accent) space-y-8">
-                        <!-- 事件 1 -->
-                        <div class="relative before:content-[''] before:absolute before:-left-[17px] before:top-1 before:w-8 before:h-8 before:rounded-full before:bg-var(--color-primary) before:border-4 before:border-var(--color-bg) shadow-md p-4 rounded-lg bg-white/10">
-                            <p class="text-lg font-semibold" style="color: var(--color-accent);">2023 - 至今</p>
-                            <h4 class="text-xl font-bold mt-1">动态图形主管 @ 顶级工作室</h4>
-                            <p class="opacity-70 mt-1">主导高预算商业广告的 3D 渲染和后期制作流程。</p>
-                        </div>
-                        <!-- 事件 2 -->
-                        <div class="relative before:content-[''] before:absolute before:-left-[17px] before:top-1 before:w-8 before:h-8 before:rounded-full before:bg-var(--color-primary) before:border-4 before:border-var(--color-bg) shadow-md p-4 rounded-lg bg-white/10">
-                            <p class="text-lg font-semibold" style="color: var(--color-accent);">2019 - 2023</p>
-                            <h4 class="text-xl font-bold mt-1">资深动态设计师 @ 数字营销机构</h4>
-                            <p class="opacity-70 mt-1">为社交媒体和 Web 平台创作 2D 和 3D 动效内容。</p>
-                        </div>
-                        <!-- 事件 3 -->
-                        <div class="relative before:content-[''] before:absolute before:-left-[17px] before:top-1 before:w-8 before:h-8 before:rounded-full before:bg-var(--color-primary) before:border-4 before:border-var(--color-bg) shadow-md p-4 rounded-lg bg-white/10">
-                            <p class="text-lg font-semibold" style="color: var(--color-accent);">2017</p>
-                            <h4 class="text-xl font-bold mt-1">数字媒体艺术学士 @ 知名艺术学院</h4>
-                            <p class="opacity-70 mt-1">专注于动画、VFX 和电影制作。</p>
-                        </div>
+                    <div class="flex flex-col sm:flex-row justify-center md:justify-start gap-4 pt-4">
+                        <!-- 更改为切换到 projects 模块 -->
+                        <button class="btn-primary" onclick="showSection('projects')">观看我的作品集 <i class="fas fa-film ml-2"></i></button>
+                        <!-- 更改为切换到 profile 模块 -->
+                        <button class="btn-primary !bg-transparent border border-var(--color-primary) text-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white hover:border-transparent" style="color: var(--color-primary); border-color: var(--color-primary);" onmouseover="this.style.setProperty('color', 'white', 'important'); this.style.setProperty('border-color', 'transparent', 'important');" onmouseout="this.style.setProperty('color', 'var(--color-primary)', 'important'); this.style.setProperty('border-color', 'var(--color-primary)', 'important');" onclick="showSection('profile')">查看个人档案 <i class="fas fa-user-circle ml-2"></i></button>
                     </div>
                 </div>
-            </div>
 
-            <!-- 兴趣标签 -->
-            <div class="glass-card p-8 mt-10">
-                <h3 class="text-2xl font-semibold mb-4 border-b pb-2" style="border-color: var(--color-primary-dark);">我的兴趣</h3>
-                <div class="flex flex-wrap gap-3">
-                    <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 3D 渲染艺术</span>
-                    <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 声音设计</span>
-                    <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 视觉编程 (TouchDesigner)</span>
-                    <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 电影叙事</span>
-                    <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 生成艺术</span>
+                <!-- 个人头像 -->
+                <div class="w-64 h-64 md:w-80 md:h-80 relative flex-shrink-0">
+                    <img src="https://placehold.co/320x320/007bff/ffffff?text=Aether+Motion+Designer" alt="Aether 个人头像" class="glass-card w-full h-full object-cover rounded-full p-2 shadow-2xl transition duration-500 hover:scale-105 border-4 border-var(--color-primary)">
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
 
-    <!-- 项目展示区域 (Projects Section) -->
-    <section id="projects" class="py-20">
-        <div class="container">
-            <h2 class="text-4xl font-bold text-center mb-12">动态设计作品集</h2>
-
-            <!-- 分类过滤按钮 -->
-            <div class="glass-card p-4 mb-8 flex flex-wrap justify-center gap-4">
-                <button class="filter-btn btn-primary" data-filter="all">全部</button>
-                <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="2d_motion">2D 动画</button>
-                <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="3d_render">3D 渲染</button>
-                <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="brand_motion">品牌动效</button>
-            </div>
-
-            <!-- 项目卡片网格 -->
-            <div id="project-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        <!-- 新模块：个人档案 (Profile) - 整合 About, Skills, Contact -->
+        <section id="profile" class="app-section">
+            <div class="container">
+                <h2 class="text-4xl font-bold text-center mb-12">个人档案 & 联系方式</h2>
                 
-                <!-- 项目卡片 1 - 2D 动画 (YouTube 示例) -->
-                <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="2d_motion" data-video-url="https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0">
-                    <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">品牌启动 2D 动画</h3>
-                    <p class="opacity-70 mb-4">为科技初创公司制作的品牌启动宣传动画，强调流畅的图形叙事。</p>
-                    <div class="flex flex-wrap gap-2 text-sm">
-                        <span class="bg-blue-500/50 text-white px-3 py-1 rounded-full">After Effects</span>
-                        <span class="bg-blue-500/50 text-white px-3 py-1 rounded-full">Illustrator</span>
-                        <span class="bg-blue-500/50 text-white px-3 py-1 rounded-full">Kinetic Type</span>
+                <!-- 1. 关于我区域 (About Section Content) -->
+                <div id="about-content" class="profile-sub-section border-b border-gray-700/50">
+                    <h3 class="text-3xl font-bold text-center mb-10 border-b-2 inline-block pb-1" style="border-color: var(--color-accent);">我的故事</h3>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
+                        <!-- 个人介绍 -->
+                        <div class="lg:col-span-1 glass-card p-8">
+                            <h4 class="text-2xl font-semibold mb-4 border-b pb-2" style="border-color: var(--color-primary-dark);">设计理念</h4>
+                            <p class="mb-4 opacity-90">
+                                我专注于将复杂的想法通过**动态图形**转化为清晰、引人入胜的视觉体验。从概念草图到最终渲染，我掌控每一个运动细节。
+                            </p>
+                            <p class="mb-4 opacity-90">
+                                我的工作流程结合了传统动画原则和最新的 3D 渲染技术，为电影、广告和数字产品提供高质量的动态视觉解决方案。
+                            </p>
+                            <p class="opacity-90">
+                                在业余时间，我喜欢研究电影制作技巧、尝试 VJ 视觉，并探索生成艺术的可能性。
+                            </p>
+                        </div>
+
+                        <!-- 时间线 -->
+                        <div class="lg:col-span-2 glass-card p-8">
+                            <h4 class="text-2xl font-semibold mb-6 border-b pb-2" style="border-color: var(--color-primary-dark);">创作历程 (时间线)</h4>
+                            <div class="relative pl-6 border-l-2 border-var(--color-accent) space-y-8">
+                                <!-- 事件 1 -->
+                                <div class="relative before:content-[''] before:absolute before:-left-[17px] before:top-1 before:w-8 before:h-8 before:rounded-full before:bg-var(--color-primary) before:border-4 before:border-var(--color-bg) shadow-md p-4 rounded-lg bg-white/10">
+                                    <p class="text-lg font-semibold" style="color: var(--color-accent);">2023 - 至今</p>
+                                    <h5 class="text-xl font-bold mt-1">动态图形主管 @ 顶级工作室</h5>
+                                    <p class="opacity-70 mt-1">主导高预算商业广告的 3D 渲染和后期制作流程。</p>
+                                </div>
+                                <!-- 事件 2 -->
+                                <div class="relative before:content-[''] before:absolute before:-left-[17px] before:top-1 before:w-8 before:h-8 before:rounded-full before:bg-var(--color-primary) before:border-4 before:border-var(--color-bg) shadow-md p-4 rounded-lg bg-white/10">
+                                    <p class="text-lg font-semibold" style="color: var(--color-accent);">2019 - 2023</p>
+                                    <h5 class="text-xl font-bold mt-1">资深动态设计师 @ 数字营销机构</h5>
+                                    <p class="opacity-70 mt-1">为社交媒体和 Web 平台创作 2D 和 3D 动效内容。</p>
+                                </div>
+                                <!-- 事件 3 -->
+                                <div class="relative before:content-[''] before:absolute before:-left-[17px] before:top-1 before:w-8 before:h-8 before:rounded-full before:bg-var(--color-primary) before:border-4 before:border-var(--color-bg) shadow-md p-4 rounded-lg bg-white/10">
+                                    <p class="text-lg font-semibold" style="color: var(--color-accent);">2017</p>
+                                    <h5 class="text-xl font-bold mt-1">数字媒体艺术学士 @ 知名艺术学院</h5>
+                                    <p class="opacity-70 mt-1">专注于动画、VFX 和电影制作。</p>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
+
+                    <!-- 兴趣标签 -->
+                    <div class="glass-card p-8 mt-10">
+                        <h4 class="text-2xl font-semibold mb-4 border-b pb-2" style="border-color: var(--color-primary-dark);">我的兴趣</h4>
+                        <div class="flex flex-wrap gap-3">
+                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 3D 渲染艺术</span>
+                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 声音设计</span>
+                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 视觉编程 (TouchDesigner)</span>
+                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 电影叙事</span>
+                            <span class="bg-blue-600/70 text-white px-4 py-2 rounded-full text-sm font-medium hover:scale-105 transition"># 生成艺术</span>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- 项目卡片 2 - 3D 渲染 (Vimeo 示例) -->
-                <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="3d_render" data-video-url="https://player.vimeo.com/video/207038753?autoplay=1&byline=0&portrait=0">
-                    <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">抽象几何 3D 渲染</h3>
-                    <p class="opacity-70 mb-4">使用 C4D 和 Octane 创建的程序化抽象循环动画，探索材质与光影的极限。</p>
-                    <div class="flex flex-wrap gap-2 text-sm">
-                        <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">C4D</span>
-                        <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Octane</span>
-                        <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">After Effects</span>
+                <!-- 2. 动态技能区域 (Skills Section Content) -->
+                <div id="skills-content" class="profile-sub-section border-b border-gray-700/50">
+                    <h3 class="text-4xl font-bold text-center mb-10 border-b-2 inline-block pb-1" style="border-color: var(--color-accent);">动态设计工具与技能</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
+                        <!-- 技能图标卡片：动态软件 -->
+                        <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
+                            <i class="fas fa-magic text-5xl mb-3" style="color: #9999FF;"></i>
+                            <p class="font-semibold">After Effects (AE)</p>
+                        </div>
+                        <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
+                            <i class="fas fa-cube text-5xl mb-3" style="color: #FF6600;"></i>
+                            <p class="font-semibold">Blender / C4D</p>
+                        </div>
+                        <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
+                            <i class="fas fa-video text-5xl mb-3" style="color: #CC6699;"></i>
+                            <p class="font-semibold">Premiere Pro (PP)</p>
+                        </div>
+                        
+                        <!-- 保留 Illustrator (虽然未圈选，但它是设计流程的一部分，此处我根据圈选明确删除) -->
+                        <!-- 删除了 Illustrator -->
+
+                        <!-- 技能图标卡片：设计能力 -->
+                        <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
+                            <i class="fas fa-lightbulb text-5xl mb-3" style="color: #339933;"></i>
+                            <p class="font-semibold">运动原理</p>
+                        </div>
+                        <!-- 删除了 动态分镜 -->
+                        <!-- 删除了 声音同步 -->
+                        <!-- 删除了 VFX/视觉特效 -->
+                        <!-- 删除了 表达式/脚本 -->
+                        
+                        <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
+                            <i class="fas fa-palette text-5xl mb-3" style="color: #007bff;"></i>
+                            <p class="font-semibold">视觉艺术</p>
+                        </div>
+                        <!-- 删除了 Pipeline 管理 -->
+                        <!-- 删除了 UI 动效 -->
                     </div>
-                    <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
                 </div>
 
-                <!-- 项目卡片 3 - 品牌动效 (YouTube 示例) -->
-                <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="brand_motion" data-video-url="https://www.youtube.com/embed/oQ_1o401-4Q?autoplay=1&rel=0">
-                    <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">APP 界面动效规范</h3>
-                    <p class="opacity-70 mb-4">为大型移动应用建立的动效设计系统，确保微交互的一致性和流畅性。</p>
-                    <div class="flex flex-wrap gap-2 text-sm">
-                        <span class="bg-pink-500/50 text-white px-3 py-1 rounded-full">Figma</span>
-                        <span class="bg-pink-500/50 text-white px-3 py-1 rounded-full">Principle</span>
-                        <span class="bg-pink-500/50 text-white px-3 py-1 rounded-full">AEP</span>
+                <!-- 3. 联系我区域 (Contact Section Content) -->
+                <div id="contact-content" class="profile-sub-section">
+                    <h3 class="text-4xl font-bold text-center mb-10 border-b-2 inline-block pb-1" style="border-color: var(--color-accent);">期待合作与交流</h3>
+                    <p class="text-xl max-w-2xl mx-auto mb-10 opacity-80 text-center">
+                        无论是新的动态项目、VFX 咨询，还是关于艺术的讨论，欢迎随时联系！
+                    </p>
+
+                    <div class="flex flex-wrap justify-center gap-6">
+                        <!-- 邮件 -->
+                        <a href="mailto:aether.motion@example.com" class="btn-primary flex items-center gap-2 text-lg">
+                            <i class="fas fa-envelope"></i> 邮件联系
+                        </a>
+                        <!-- 微信 (模态框触发) -->
+                        <button class="btn-primary flex items-center gap-2 text-lg !bg-green-600 hover:!bg-green-700" onclick="openModal('wechatModal')">
+                            <i class="fab fa-weixin"></i> 微信扫码
+                        </button>
+                        <!-- QQ (模态框触发) -->
+                        <button class="btn-primary flex items-center gap-2 text-lg !bg-blue-800 hover:!bg-blue-900" onclick="openModal('qqModal')">
+                            <i class="fab fa-qq"></i> QQ 交流
+                        </button>
                     </div>
-                    <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
                 </div>
 
-                <!-- 项目卡片 4 - 3D 渲染 -->
-                <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="3d_render" data-video-url="https://player.vimeo.com/video/987654321?autoplay=1&byline=0&portrait=0">
-                    <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">概念车展示片</h3>
-                    <p class="opacity-70 mb-4">使用 C4D 和 Octane 渲染器完成的高精度产品宣传片。</p>
-                    <div class="flex flex-wrap gap-2 text-sm">
-                        <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Cinema 4D</span>
-                        <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Octane</span>
+            </div>
+        </section>
+
+        <!-- 项目展示区域 (Projects Section) -->
+        <section id="projects" class="app-section">
+            <div class="container">
+                <h2 class="text-4xl font-bold text-center mb-12">动态设计作品集</h2>
+
+                <!-- 分类过滤按钮 -->
+                <div class="glass-card p-4 mb-8 flex flex-wrap justify-center gap-4">
+                    <button class="filter-btn btn-primary" data-filter="all">全部</button>
+                    <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="2d_motion">2D 动画</button>
+                    <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="3d_render">3D 渲染</button>
+                    <button class="filter-btn btn-primary !bg-transparent text-var(--color-primary) border border-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white" data-filter="brand_motion">品牌动效</button>
+                </div>
+
+                <!-- 项目卡片网格 -->
+                <div id="project-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    
+                    <!-- 项目卡片 1 - 2D 动画 (YouTube 示例) -->
+                    <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="2d_motion" data-video-url="https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0">
+                        <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">品牌启动 2D 动画</h3>
+                        <p class="opacity-70 mb-4">为科技初创公司制作的品牌启动宣传动画，强调流畅的图形叙事。</p>
+                        <div class="flex flex-wrap gap-2 text-sm">
+                            <span class="bg-blue-500/50 text-white px-3 py-1 rounded-full">After Effects</span>
+                            <span class="bg-blue-500/50 text-white px-3 py-1 rounded-full">Illustrator</span>
+                            <span class="bg-blue-500/50 text-white px-3 py-1 rounded-full">Kinetic Type</span>
+                        </div>
+                        <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
                     </div>
-                    <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
+
+                    <!-- 项目卡片 2 - 3D 渲染 (Vimeo 示例) -->
+                    <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="3d_render" data-video-url="https://player.vimeo.com/video/207038753?autoplay=1&byline=0&portrait=0">
+                        <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">抽象几何 3D 渲染</h3>
+                        <p class="opacity-70 mb-4">使用 Blender 创建的程序化抽象循环动画，探索材质与光影的极限。</p>
+                        <div class="flex flex-wrap gap-2 text-sm">
+                            <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Blender</span>
+                            <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Cycles Render</span>
+                            <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Sound Design</span>
+                        </div>
+                        <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
+                    </div>
+
+                    <!-- 项目卡片 3 - 品牌动效 (YouTube 示例) -->
+                    <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="brand_motion" data-video-url="https://www.youtube.com/embed/oQ_1o401-4Q?autoplay=1&rel=0">
+                        <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">APP 界面动效规范</h3>
+                        <p class="opacity-70 mb-4">为大型移动应用建立的动效设计系统，确保微交互的一致性和流畅性。</p>
+                        <div class="flex flex-wrap gap-2 text-sm">
+                            <span class="bg-pink-500/50 text-white px-3 py-1 rounded-full">Figma</span>
+                            <span class="bg-pink-500/50 text-white px-3 py-1 rounded-full">Principle</span>
+                            <span class="bg-pink-500/50 text-white px-3 py-1 rounded-full">AEP</span>
+                        </div>
+                        <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
+                    </div>
+
+                    <!-- 项目卡片 4 - 3D 渲染 -->
+                    <div class="project-card glass-card p-6 transform hover:scale-[1.02] transition duration-300" data-category="3d_render" data-video-url="https://player.vimeo.com/video/987654321?autoplay=1&byline=0&portrait=0">
+                        <h3 class="text-2xl font-bold mb-3" style="color: var(--color-primary);">概念车展示片</h3>
+                        <p class="opacity-70 mb-4">使用 C4D 和 Octane 渲染器完成的高精度汽车产品宣传片。</p>
+                        <div class="flex flex-wrap gap-2 text-sm">
+                            <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Cinema 4D</span>
+                            <span class="bg-red-500/50 text-white px-3 py-1 rounded-full">Octane</span>
+                        </div>
+                        <button class="mt-4 inline-block text-var(--color-accent) hover:underline font-semibold" onclick="openVideoModal(this)">观看作品 <i class="fas fa-play-circle ml-1"></i></button>
+                    </div>
                 </div>
             </div>
-        </div>
-    </section>
-
-    <!-- 技能展示区域 (Skills Section) -->
-    <section id="skills" class="py-20">
-        <div class="container">
-            <h2 class="text-4xl font-bold text-center mb-12">动态设计工具与技能</h2>
-
-            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
-                <!-- 技能图标卡片：动态软件 -->
-                <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
-                    <i class="fas fa-magic text-5xl mb-3" style="color: #9999FF;"></i>
-                    <p class="font-semibold">After Effects (AE)</p>
-                </div>
-                <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
-                    <i class="fas fa-cube text-5xl mb-3" style="color: #FF6600;"></i>
-                    <p class="font-semibold"> C4D</p>
-                </div>
-                <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
-                    <i class="fas fa-video text-5xl mb-3" style="color: #CC6699;"></i>
-                    <p class="font-semibold">Premiere Pro (PP)</p>
-                </div>
-                <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
-                    <i class="fas fa-bezier-curve text-5xl mb-3" style="color: #61DAFB;"></i>
-                    <p class="font-semibold">Illustrator</p>
-                </div>
-                <!-- 技能图标卡片：设计能力 -->
-                <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
-                    <i class="fas fa-lightbulb text-5xl mb-3" style="color: #339933;"></i>
-                    <p class="font-semibold">运动原理</p>
-                </div>
-                <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
-                    <i class="fas fa-palette text-5xl mb-3" style="color: #007bff;"></i>
-                    <p class="font-semibold">视觉艺术</p>
-                </div>
-                <div class="glass-card flex flex-col items-center p-6 text-center hover:shadow-2xl hover:border-var(--color-accent) border-2 border-transparent transition duration-300">
-                    <i class="fas fa-mobile-alt text-5xl mb-3" style="color: #DD0031;"></i>
-                    <p class="font-semibold">UI 动效</p>
+        </section>
+        
+        <!-- 社交媒体链接区域 (Social Media) - 保持独立，方便导航和 footer 放置 -->
+        <section id="social" class="app-section">
+            <div class="container">
+                <h2 class="text-4xl font-bold text-center mb-12">连接我 (社交媒体)</h2>
+                <p class="text-center opacity-70 mb-8">在这里找到我的作品分享和专业动态。</p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+                    <!-- 社交媒体卡片 1: ArtStation (动态作品集) -->
+                    <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-blue-500">
+                        <i class="fab fa-artstation text-4xl mb-3" style="color: #053EFF;"></i>
+                        <h4 class="text-xl font-bold mb-1">ArtStation</h4>
+                        <p class="opacity-70">高精度动态渲染作品</p>
+                    </a>
+                    <!-- 社交媒体卡片 2: Bilibili (Reel & 分享) -->
+                    <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-pink-500">
+                        <i class="fas fa-video text-4xl mb-3" style="color: #f06a8f;"></i>
+                        <h4 class="text-xl font-bold mb-1">Bilibili (B站)</h4>
+                        <p class="opacity-70">动态作品和教程分享</p>
+                    </a>
+                    <!-- 社交媒体卡片 3: Vimeo -->
+                    <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-green-500">
+                        <i class="fab fa-vimeo text-4xl mb-3" style="color: #1AB7EA;"></i>
+                        <h4 class="text-xl font-bold mb-1">Vimeo</h4>
+                        <p class="opacity-70">高清无损作品展示</p>
+                    </a>
+                    <!-- 社交媒体卡片 4: 领英 -->
+                    <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-blue-500">
+                        <i class="fab fa-linkedin text-4xl mb-3" style="color: #0A66C2;"></i>
+                        <h4 class="text-xl font-bold mb-1">LinkedIn</h4>
+                        <p class="opacity-70">专业履历与合作洽谈</p>
+                    </a>
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
+        
+        <!-- 每日笔记区域 (Daily Journal Section) -->
+        <section id="journal" class="app-section">
+            <div class="container">
+                <!-- 标题更新 -->
+                <h2 class="text-4xl font-bold text-center mb-6">每日设计笔记 / 灵感日志 (公开)</h2>
+                <!-- 描述更新 -->
+                <p class="text-center opacity-70 mb-8">记录您的设计灵感、学习总结或日常想法，**所有人可见**。</p>
 
-    <!-- 社交媒体链接区域 (Social Media) -->
-    <section id="social" class="py-20">
-        <div class="container">
-            <h2 class="text-4xl font-bold text-center mb-12">连接我</h2>
+                <!-- 认证状态信息 -->
+                <p id="auth-message" class="text-center text-yellow-400 mb-4">正在自动登录...</p>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-                <!-- 社交媒体卡片 1: ArtStation (动态作品集) -->
-                <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-blue-500">
-                    <i class="fab fa-artstation text-4xl mb-3" style="color: #053EFF;"></i>
-                    <h4 class="text-xl font-bold mb-1">ArtStation</h4>
-                    <p class="opacity-70">高精度动态渲染作品</p>
-                </a>
-                <!-- 社交媒体卡片 2: Bilibili (Reel & 分享) -->
-                <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-pink-500">
-                    <i class="fas fa-video text-4xl mb-3" style="color: #f06a8f;"></i>
-                    <h4 class="text-xl font-bold mb-1">Bilibili (B站)</h4>
-                    <p class="opacity-70">动态作品和教程分享</p>
-                </a>
-                <!-- 社交媒体卡片 3: Vimeo -->
-                <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-green-500">
-                    <i class="fab fa-vimeo text-4xl mb-3" style="color: #1AB7EA;"></i>
-                    <h4 class="text-xl font-bold mb-1">Vimeo</h4>
-                    <p class="opacity-70">高清无损作品展示</p>
-                </a>
-                <!-- 社交媒体卡片 4: 领英 -->
-                <a href="#" target="_blank" class="glass-card p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-blue-500">
-                    <i class="fab fa-linkedin text-4xl mb-3" style="color: #0A66C2;"></i>
-                    <h4 class="text-xl font-bold mb-1">LinkedIn</h4>
-                    <p class="opacity-70">专业履历与合作洽谈</p>
-                </a>
+                <!-- 笔记内容区域 (现在是默认显示，并由 JS 更新内容) -->
+                <div id="journal-content">
+                    <div class="glass-card p-8 mb-10">
+                        <div class="flex justify-between items-center mb-4 border-b border-gray-700/50 pb-3">
+                            <h3 class="text-xl font-semibold">记录新笔记 (作者专用编辑区)</h3>
+                        </div>
+
+                        <div class="text-sm opacity-60 mb-4">
+                            您的唯一用户ID：<span id="current-user-id" class="font-mono break-all text-var(--color-accent)">正在认证...</span>
+                        </div>
+                        <textarea id="note-input" class="w-full p-4 glass-card resize-y min-h-[150px] outline-none focus:ring-2 focus:ring-var(--color-primary) mb-4" placeholder="今天有什么新的动态设计灵感或技术突破？"></textarea>
+                        <button class="btn-primary w-full md:w-auto flex items-center justify-center gap-2" onclick="submitNote()">
+                            <i class="fas fa-paper-plane"></i> 提交笔记
+                        </button>
+                    </div>
+
+                    <!-- 笔记列表显示区域 -->
+                    <div class="glass-card p-8">
+                        <h3 class="text-2xl font-semibold mb-6 border-b pb-2" style="border-color: var(--color-primary-dark);">历史记录</h3>
+                        <div id="notes-list" class="space-y-4">
+                            <!-- 笔记将通过 JavaScript 实时加载到这里 -->
+                            <p class="text-center opacity-60 p-4">正在加载笔记...</p>
+                        </div>
+                    </div>
+                </div>
+
             </div>
-        </div>
-    </section>
+        </section>
 
-    <!-- 联系我区域 (Contact Section) -->
-    <section id="contact" class="py-20">
-        <div class="container text-center">
-            <h2 class="text-4xl font-bold mb-8">期待合作与交流</h2>
-            <p class="text-xl max-w-2xl mx-auto mb-10 opacity-80">
-                无论是新的动态项目、VFX 咨询，还是关于艺术的讨论，欢迎随时联系！
-            </p>
-
-            <div class="flex flex-wrap justify-center gap-6">
-                <!-- 邮件 -->
-                <a href="mailto:aether.motion@example.com" class="btn-primary flex items-center gap-2 text-lg">
-                    <i class="fas fa-envelope"></i> 邮件联系
-                </a>
-                <!-- 微信 (模态框触发) -->
-                <button class="btn-primary flex items-center gap-2 text-lg !bg-green-600 hover:!bg-green-700" onclick="openModal('wechatModal')">
-                    <i class="fab fa-weixin"></i> 微信扫码
-                </button>
-                <!-- QQ (模态框触发) -->
-                <button class="btn-primary flex items-center gap-2 text-lg !bg-blue-800 hover:!bg-blue-900" onclick="openModal('qqModal')">
-                    <i class="fab fa-qq"></i> QQ 交流
-                </button>
+        <!-- 页脚 (Footer) - 移到主内容容器内 -->
+        <footer class="glass-card !rounded-none mt-12 py-6 border-t border-gray-700">
+            <div class="container text-center text-sm opacity-70">
+                <p>&copy; 2025 Aether Motion Design. All rights reserved. | 运动赋能视觉叙事。</p>
+                <p class="mt-2">灵感源自优雅设计和高效体验。</p>
             </div>
-        </div>
-    </section>
-
-    <!-- 页脚 (Footer) -->
-    <footer class="glass-card !rounded-none mt-12 py-6 border-t border-gray-700">
-        <div class="container text-center text-sm opacity-70">
-            <p>&copy; 2025 Aether Motion Design. All rights reserved. | 运动赋能视觉叙事。</p>
-            <p class="mt-2">灵感源自优雅设计和高效体验。</p>
-        </div>
-    </footer>
-
+        </footer>
+    </main>
+    
     <!-- 模态框 1: 微信二维码 (不变) -->
     <div id="wechatModal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] hidden opacity-0 transition-opacity duration-300">
         <div class="glass-card p-8 w-11/12 max-w-md relative animate-fade-in-up">
@@ -455,7 +745,7 @@
         </div>
     </div>
 
-    <!-- 模态框 3: 作品视频嵌入 (New Modal) -->
+    <!-- 模态框 3: 作品视频嵌入 -->
     <div id="projectVideoModal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] hidden opacity-0 transition-opacity duration-300">
         <div class="glass-card p-4 w-11/12 max-w-4xl relative animate-fade-in-up">
             <button class="absolute top-2 right-4 text-3xl hover:text-red-500 transition text-white" onclick="closeVideoModal()">&times;</button>
@@ -469,7 +759,17 @@
     </div>
     
     <!-- 引入自定义 JavaScript 脚本 -->
-    <script>
+    <script type="module">
+        // 注意：Firebase 相关的初始化和函数已移至顶部的 <script type="module"> 块中。
+
+        // =======================================================
+        // 外部模块导入检查 (防止二次导入)
+        // =======================================================
+        if (typeof window.initializeFirebase === 'undefined') {
+            console.warn("Firebase initialization skipped. Check if Firebase script block is correctly placed.");
+        }
+
+
         // 确保 Tailwind 的动画类可用
         tailwind.config = {
             theme: {
@@ -500,10 +800,14 @@
         const mobileMenu = document.getElementById('mobile-menu');
         const filterBtns = document.querySelectorAll('.filter-btn');
         const projectCards = document.querySelectorAll('.project-card');
+        // 更新选择器，只选择新的应用模块
+        const appSections = document.querySelectorAll('.app-section'); 
 
         // Video Modal Elements
         const projectVideoModal = document.getElementById('projectVideoModal');
         const videoContainer = document.getElementById('videoContainer');
+        const navLinks = document.querySelectorAll('.nav-link');
+        const mobileNavLinks = document.querySelectorAll('.mobile-nav-link');
 
 
         // =======================================================
@@ -558,7 +862,7 @@
 
 
         // =======================================================
-        // 2. 导航栏功能 (移动菜单 & 平滑滚动)
+        // 2. 导航栏功能 (移动菜单 & 模块切换)
         // =======================================================
 
         /**
@@ -571,7 +875,7 @@
         /**
          * 关闭移动端菜单。
          */
-        function closeMobileMenu() {
+        window.closeMobileMenu = function() { // 暴露到全局
             mobileMenu.classList.add('hidden');
         }
 
@@ -579,56 +883,85 @@
         mobileMenuBtn.addEventListener('click', toggleMobileMenu);
 
         /**
-         * 平滑滚动到锚点。
-         * @param {Event} event - 点击事件
+         * 核心功能：显示目标模块，隐藏其他模块。
+         * @param {string} sectionId - 目标模块的 ID (e.g., 'profile', 'projects')
          */
-        function smoothScroll(event) {
-            event.preventDefault();
-            const targetId = event.currentTarget.getAttribute('href');
-            const targetElement = document.querySelector(targetId);
-            if (targetElement) {
-                // 计算滚动位置，留出导航栏高度
-                const headerHeight = document.querySelector('header').offsetHeight;
-                const topPosition = targetElement.offsetTop - headerHeight;
-                
-                window.scrollTo({
-                    top: topPosition,
-                    behavior: 'smooth'
-                });
-            }
-        }
-
-        /**
-         * 滚动时导航链接高亮 (Scroll Spy)。
-         */
-        function scrollSpy() {
-            const sections = document.querySelectorAll('section');
-            const navLinks = document.querySelectorAll('.nav-link');
-            const mobileNavLinks = document.querySelectorAll('.mobile-nav-link');
-            const headerHeight = document.querySelector('header').offsetHeight;
-            let current = '';
-
-            // 检查视口内的section
-            sections.forEach(section => {
-                const sectionTop = section.offsetTop - headerHeight - 50; 
-                const sectionBottom = sectionTop + section.offsetHeight;
-                if (scrollY >= sectionTop && scrollY < sectionBottom) {
-                    current = section.getAttribute('id');
-                }
+        window.showSection = function(sectionId) {
+            // 1. 隐藏所有模块，并移除 active 类
+            appSections.forEach(section => {
+                section.classList.remove('active');
+                // 确保在切换时将页面滚动到顶部
+                window.scrollTo(0, 0); 
             });
 
-            // 高亮导航链接
-            [...navLinks, ...mobileNavLinks].forEach(link => {
+            // 2. 显示目标模块，并添加 active 类
+            const targetSection = document.getElementById(sectionId);
+            if (targetSection) {
+                // 先将 display 设置为 block，再通过 transition 动画显示 opacity 和 transform
+                targetSection.style.display = 'block'; 
+                setTimeout(() => {
+                    targetSection.classList.add('active');
+                }, 10);
+                
+                // 3. 更新导航栏高亮状态
+                updateNavLink(sectionId);
+                
+                // 4. 关闭移动菜单（如果它开着）
+                closeMobileMenu();
+
+                // 5. 更新 URL hash
+                history.pushState(null, '', `#${sectionId}`);
+            }
+        }
+        
+        /**
+         * 更新导航栏链接的激活状态。
+         * @param {string} currentSectionId - 当前显示的模块 ID
+         */
+        function updateNavLink(currentSectionId) {
+            // 重新选择所有导航链接，确保它们是最新的
+            const currentNavLinks = document.querySelectorAll('.nav-link, .mobile-nav-link');
+
+            currentNavLinks.forEach(link => {
                 link.classList.remove('active');
-                if (link.getAttribute('data-section') === current) {
+                // 从 href 获取模块 ID (去除 #)
+                const sectionName = link.getAttribute('href').substring(1);
+                
+                if (sectionName === currentSectionId) {
                     link.classList.add('active');
                 }
             });
         }
 
-        window.addEventListener('scroll', scrollSpy);
 
+        /**
+         * 页面初始化时检查 URL hash，决定显示哪个模块。
+         */
+        function initializeSection() {
+            const hash = window.location.hash.replace('#', '');
+            const defaultSection = 'hero';
+            let initialSectionId = defaultSection;
 
+            // 检查 hash 是否对应有效的模块
+            if (hash && document.getElementById(hash)) {
+                initialSectionId = hash;
+            }
+
+            // 确保所有模块初始状态为隐藏，只有目标模块显示
+            appSections.forEach(section => {
+                section.style.display = 'none';
+                section.classList.remove('active');
+            });
+
+            // 立即显示初始模块
+            const initialSection = document.getElementById(initialSectionId);
+            if (initialSection) {
+                 initialSection.style.display = 'block';
+                 initialSection.classList.add('active');
+                 updateNavLink(initialSectionId);
+            }
+        }
+        
         // =======================================================
         // 3. 项目分类过滤功能
         // =======================================================
@@ -675,7 +1008,7 @@
          * 打开指定的模态框。
          * @param {string} modalId - 模态框的 ID
          */
-        function openModal(modalId) {
+        window.openModal = function(modalId) { 
             const modal = document.getElementById(modalId);
             modal.classList.remove('hidden');
             // 延迟添加 opacity-100，触发过渡动画
@@ -686,7 +1019,7 @@
          * 关闭指定的模态框。
          * @param {string} modalId - 模态框的 ID
          */
-        function closeModal(modalId) {
+        window.closeModal = function(modalId) {
             const modal = document.getElementById(modalId);
             modal.style.opacity = 0;
             // 延迟隐藏，等待过渡动画完成
@@ -709,7 +1042,7 @@
          * 打开视频模态框，并嵌入作品链接。
          * @param {HTMLElement} button - 点击的按钮元素
          */
-        function openVideoModal(button) {
+        window.openVideoModal = function(button) { // 绑定到 window 以便 HTML 访问
             const card = button.closest('.project-card');
             const videoUrl = card.getAttribute('data-video-url');
 
@@ -738,7 +1071,7 @@
         /**
          * 关闭视频模态框，并停止播放视频。
          */
-        function closeVideoModal() {
+        window.closeVideoModal = function() { // 绑定到 window 以便 HTML 访问
             projectVideoModal.style.opacity = 0;
             
             // 清空 iframe，停止视频播放 (关键步骤)
@@ -754,15 +1087,28 @@
             }
         });
 
+        // =======================================================
+        // 6. 监听浏览器前进/后退按钮 (Popstate)
+        // =======================================================
+
+        window.addEventListener('popstate', () => {
+            const hash = window.location.hash.replace('#', '');
+            if (hash) {
+                // 如果 hash 存在，切换到对应模块
+                showSection(hash);
+            } else {
+                // 如果 hash 为空，返回英雄区域
+                showSection('hero');
+            }
+        });
+
 
         // 页面加载完成后执行初始化
         window.addEventListener('DOMContentLoaded', () => {
             initializeTheme();
-            scrollSpy(); // 确保初始状态下的导航链接高亮
+            initializeSection(); // 使用新的初始化函数来决定显示哪个模块
         });
         
     </script>
 </body>
 </html>
-
-
