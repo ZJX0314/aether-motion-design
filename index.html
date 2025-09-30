@@ -127,6 +127,7 @@
             font-weight: 600;
             transition: background-color 0.3s ease-in-out, transform 0.2s ease;
             box-shadow: 0 4px 10px rgba(0, 123, 255, 0.4);
+            cursor: pointer; /* 确保按钮有点击感 */
         }
 
         .btn-primary:hover {
@@ -256,7 +257,7 @@
         <!-- 英雄区域 (Hero Section) -->
         <!-- 优化：在移动端，将 Flex-row 改为 Stacked column -->
         <section id="hero" class="app-section active min-h-screen flex items-center pb-12">
-            <!-- 关键修复：确保在桌面端 (md) 也有足够的顶部间距来避开导航栏 (h-16 = 64px) -->
+            <!-- 关键修复：移除 z-10 relative，改用事件监听器 -->
             <div class="container flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left pt-16 md:pt-[64px]">
                 <!-- 文字内容 -->
                 <!-- 优化：移除 max-w-xl，让其在移动端占据更多宽度 -->
@@ -268,15 +269,16 @@
                         专注于通过动画、3D 渲染和视觉效果来赋予品牌和故事生命。我坚信运动的力量能创造沉浸式的用户体验。
                     </p>
                     <div class="flex flex-col sm:flex-row justify-center md:justify-start gap-4 pt-4">
-                        <!-- 修复 1: 确保 onclick 准确调用 showSection('projects') -->
-                        <button class="btn-primary" onclick="showSection('projects')">观看我的作品集 <i class="fas fa-film ml-2"></i></button>
-                        <!-- 修复 2: 确保 onclick 准确调用 showSection('about') -->
-                        <button class="btn-primary !bg-transparent border border-var(--color-primary) text-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white hover:border-transparent" style="color: var(--color-primary); border-color: var(--color-primary);" onmouseover="this.style.setProperty('color', 'white', 'important'); this.style.setProperty('border-color', 'transparent', 'important');" onmouseout="this.style.setProperty('color', 'var(--color-primary)', 'important'); this.style.setProperty('border-color', 'var(--color-primary)', 'important');" onclick="showSection('about')">了解我的故事 <i class="fas fa-user-circle ml-2"></i></button>
+                        <!-- 关键修复：添加 ID 并移除内联 onclick -->
+                        <button id="btn-hero-projects" class="btn-primary">观看我的作品集 <i class="fas fa-film ml-2"></i></button>
+                        <!-- 关键修复：添加 ID 并移除内联 onclick -->
+                        <button id="btn-hero-about" class="btn-primary !bg-transparent border border-var(--color-primary) text-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white hover:border-transparent" style="color: var(--color-primary); border-color: var(--color-primary);" onmouseover="this.style.setProperty('color', 'white', 'important'); this.style.setProperty('border-color', 'transparent', 'important');" onmouseout="this.style.setProperty('color', 'var(--color-primary)', 'important'); this.style.setProperty('border-color', 'var(--color-primary)', 'important');">了解我的故事 <i class="fas fa-user-circle ml-2"></i></button>
                     </div>
                 </div>
 
                 <!-- 个人头像 -->
-                <div class="w-48 h-48 md:w-80 md:h-80 relative flex-shrink-0">
+                <!-- 确保头像也在 z-index 较高的容器内 -->
+                <div class="w-48 h-48 md:w-80 md:h-80 relative flex-shrink-0 z-10">
                     <img src="https://placehold.co/320x320/007bff/ffffff?text=Aether+Motion+Designer" alt="Aether 个人头像" class="glass-card w-full h-full object-cover rounded-full p-2 shadow-2xl transition duration-500 hover:scale-105 border-4 border-var(--color-primary)">
                 </div>
             </div>
@@ -554,138 +556,26 @@
     
     <!-- 引入自定义 JavaScript 脚本 -->
     <script type="module">
+        // =======================================================
+        // 核心变量定义 (在模块顶层定义)
+        // =======================================================
         const htmlEl = document.documentElement;
         const bodyEl = document.body;
-        const themeToggle = document.getElementById('theme-toggle');
-        const themeToggleMobile = document.getElementById('theme-toggle-mobile');
-        const themeIconDesktop = document.getElementById('theme-icon');
-        const themeIconMobile = document.getElementById('theme-icon-mobile');
-        const mobileMenuBtn = document.getElementById('mobile-menu-btn');
         const mobileMenu = document.getElementById('mobile-menu');
-        const filterBtns = document.querySelectorAll('.filter-btn');
-        const projectCards = document.querySelectorAll('.project-card');
-        // 更新选择器以包含所有单独的模块
-        const appSections = document.querySelectorAll('.app-section'); 
-
-        const projectVideoModal = document.getElementById('projectVideoModal');
-        const videoContainer = document.getElementById('videoContainer');
-
-
-        // =======================================================
-        // 1. 主题切换功能 (明暗模式)
-        // =======================================================
-
-        /**
-         * 初始化主题：从 localStorage 或系统偏好设置中读取。
-         */
-        function initializeTheme() {
-            const savedTheme = localStorage.getItem('theme');
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            
-            let initialTheme = 'dark'; // 默认设置为暗色主题，符合优雅简约风格
-
-            if (savedTheme) {
-                initialTheme = savedTheme;
-            } else if (prefersDark) {
-                initialTheme = 'dark';
-            }
-
-            setTheme(initialTheme);
-        }
-
-        /**
-         * 设置主题并更新图标。
-         * @param {string} theme - 'light' 或 'dark'
-         */
-        function setTheme(theme) {
-            htmlEl.setAttribute('data-theme', theme);
-            localStorage.setItem('theme', theme);
-
-            const isDark = theme === 'dark';
-            const iconTitle = isDark ? 'fas fa-sun' : 'fas fa-moon';
-
-            themeIconDesktop.className = iconTitle;
-            themeIconMobile.className = iconTitle;
-        }
-
-        /**
-         * 切换当前主题。
-         */
-        function toggleTheme() {
-            const currentTheme = htmlEl.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            setTheme(newTheme);
-        }
-
-        // 绑定主题切换事件
-        themeToggle.addEventListener('click', toggleTheme);
-        themeToggleMobile.addEventListener('click', toggleTheme);
-
-
-        // =======================================================
-        // 2. 导航栏功能 (移动菜单 & 模块切换)
-        // =======================================================
-
-        /**
-         * 切换移动端菜单的可见性。
-         */
-        function toggleMobileMenu() {
-            mobileMenu.classList.toggle('hidden');
-        }
-
-        /**
-         * 关闭移动端菜单。
-         */
-        window.closeMobileMenu = function() { // 暴露到全局
-            mobileMenu.classList.add('hidden');
-        }
-
-        // 绑定移动菜单按钮事件
-        mobileMenuBtn.addEventListener('click', toggleMobileMenu);
-
-        /**
-         * 核心功能：显示目标模块，隐藏其他模块。
-         * @param {string} sectionId - 目标模块的 ID (e.g., 'about', 'projects')
-         */
-        window.showSection = function(sectionId) {
-            // 1. 隐藏所有模块，并移除 active 类
-            appSections.forEach(section => {
-                section.classList.remove('active');
-            });
-
-            // 2. 显示目标模块，并添加 active 类
-            const targetSection = document.getElementById(sectionId);
-            if (targetSection) {
-                // 关键：将 display 设置为 flex，配合 CSS 实现垂直居中
-                targetSection.style.display = 'flex'; 
-                setTimeout(() => {
-                    targetSection.classList.add('active');
-                }, 10);
-                
-                // 3. 更新导航栏高亮状态
-                updateNavLink(sectionId);
-                
-                // 4. 关闭移动菜单（如果它开着）
-                closeMobileMenu();
-
-                // 5. 更新 URL hash
-                history.pushState(null, '', `#${sectionId}`);
-            }
-
-            // 6. 关键：控制 body 滚动条
-            if (sectionId === 'hero') {
-                bodyEl.classList.remove('no-scroll');
-            } else {
-                bodyEl.classList.add('no-scroll');
-            }
-        }
         
+        // 确保所有在 HTML 中被调用的函数提升到 window 对象，确保它们在全局可用
+        // 这样可以解决在模块化脚本中内联事件处理器无法访问函数的问题
+        const appSections = document.querySelectorAll('.app-section'); 
+        
+        // =======================================================
+        // 辅助函数 (提升至顶层作用域)
+        // =======================================================
+
         /**
          * 更新导航栏链接的激活状态。
          * @param {string} currentSectionId - 当前显示的模块 ID
          */
         function updateNavLink(currentSectionId) {
-            // 使用更精确的选择器 [data-section]
             const currentNavLinks = document.querySelectorAll(`[data-section]`);
 
             currentNavLinks.forEach(link => {
@@ -697,133 +587,65 @@
                 }
             });
             
-            // 特殊处理：如果回到 hero 页面，则不激活任何导航链接
             if (currentSectionId === 'hero') {
                  currentNavLinks.forEach(link => link.classList.remove('active'));
             }
         }
-
-
-        /**
-         * 页面初始化时检查 URL hash，决定显示哪个模块。
-         */
-        function initializeSection() {
-            const hash = window.location.hash.replace('#', '');
-            const defaultSection = 'hero';
-            let initialSectionId = defaultSection;
-
-            // 检查 hash 是否对应有效的模块
-            if (hash && document.getElementById(hash)) {
-                initialSectionId = hash;
-            }
-
-            // 确保所有模块初始状态为隐藏，只有目标模块显示
+        
+        window.showSection = function(sectionId) {
+            const allNavLinks = document.querySelectorAll('.nav-link, .mobile-nav-link');
+            allNavLinks.forEach(link => {
+                link.classList.remove('active');
+            });
+            
             appSections.forEach(section => {
-                section.style.display = 'none';
                 section.classList.remove('active');
             });
 
-            // 立即显示初始模块
-            const initialSection = document.getElementById(initialSectionId);
-            if (initialSection) {
-                 initialSection.style.display = 'flex'; // 初始化时使用 flex
-                 initialSection.classList.add('active');
-                 updateNavLink(initialSectionId);
+            const targetSection = document.getElementById(sectionId);
+            if (targetSection) {
+                targetSection.style.display = 'flex'; 
+                setTimeout(() => {
+                    targetSection.classList.add('active');
+                }, 10);
+                
+                // 修复：现在 updateNavLink 在全局作用域，可以安全调用
+                updateNavLink(sectionId);
+                window.closeMobileMenu();
+
+                history.pushState(null, '', `#${sectionId}`);
             }
-            // 初始化时设置body滚动状态
-            if (initialSectionId !== 'hero') {
+
+            if (sectionId === 'hero') {
+                bodyEl.classList.remove('no-scroll');
+            } else {
                 bodyEl.classList.add('no-scroll');
             }
         }
         
-        // =======================================================
-        // 3. 项目分类过滤功能
-        // =======================================================
+        window.closeMobileMenu = function() {
+            mobileMenu.classList.add('hidden');
+        }
 
-        filterBtns.forEach(button => {
-            button.addEventListener('click', () => {
-                // 移除所有按钮的 active 状态
-                filterBtns.forEach(btn => btn.classList.remove('active'));
-                
-                // 添加当前点击按钮的 active 状态
-                button.classList.add('active');
-                
-                const filter = button.getAttribute('data-filter');
-
-                projectCards.forEach(card => {
-                    const category = card.getAttribute('data-category');
-                    
-                    // 使用过渡效果进行隐藏和显示
-                    if (filter === 'all' || filter === category) {
-                        card.style.display = 'block';
-                        setTimeout(() => {
-                             card.style.opacity = '1';
-                             card.style.transform = 'scale(1)';
-                        }, 50);
-                    } else {
-                        card.style.opacity = '0';
-                        card.style.transform = 'scale(0.9)';
-                        setTimeout(() => {
-                             card.style.display = 'none';
-                        }, 300); // 匹配过渡时间
-                    }
-                });
-            });
-        });
-        
-        // 初始化时选中“全部”
-        document.querySelector('.filter-btn[data-filter="all"]').click();
-        
-        // =======================================================
-        // 4. 通用模态框功能 (QR Code)
-        // =======================================================
-
-        /**
-         * 打开指定的模态框。
-         * @param {string} modalId - 模态框的 ID
-         */
         window.openModal = function(modalId) { 
             const modal = document.getElementById(modalId);
             modal.classList.remove('hidden');
-            // 延迟添加 opacity-100，触发过渡动画
             setTimeout(() => modal.style.opacity = 1, 10);
-            bodyEl.classList.add('no-scroll'); // 锁定背景滚动
+            bodyEl.classList.add('no-scroll');
         }
 
-        /**
-         * 关闭指定的模态框。
-         * @param {string} modalId - 模态框的 ID
-         */
         window.closeModal = function(modalId) {
             const modal = document.getElementById(modalId);
             modal.style.opacity = 0;
-            // 延迟隐藏，等待过渡动画完成
             setTimeout(() => {
                 modal.classList.add('hidden');
-                // 恢复body滚动状态（仅当当前模块内容不需要滚动时）
                 if (document.querySelector('.app-section.active')?.id === 'hero') {
                     bodyEl.classList.remove('no-scroll');
                 }
             }, 300);
         }
 
-        // 监听点击外部关闭模态框
-        document.addEventListener('click', (e) => {
-            if (e.target.id === 'wechatModal' || e.target.id === 'qqModal') {
-                closeModal(e.target.id);
-            }
-        });
-
-
-        // =======================================================
-        // 5. 视频模态框功能
-        // =======================================================
-
-        /**
-         * 打开视频模态框，并嵌入作品链接。
-         * @param {HTMLElement} button - 点击的按钮元素
-         */
-        window.openVideoModal = function(button) { // 绑定到 window 以便 HTML 访问
+        window.openVideoModal = function(button) { 
             const card = button.closest('.project-card');
             const videoUrl = card.getAttribute('data-video-url');
 
@@ -832,7 +654,6 @@
                 return;
             }
             
-            // 构建 iframe 元素
             const iframe = document.createElement('iframe');
             iframe.setAttribute('src', videoUrl);
             iframe.setAttribute('frameborder', '0');
@@ -840,61 +661,220 @@
             iframe.setAttribute('allowfullscreen', 'true');
             iframe.setAttribute('title', 'Project Video Embed');
             
-            // 清空旧内容并插入新的 iframe
+            const videoContainer = document.getElementById('videoContainer');
             videoContainer.innerHTML = '';
             videoContainer.appendChild(iframe);
 
-            // 显示模态框
+            const projectVideoModal = document.getElementById('projectVideoModal');
             projectVideoModal.classList.remove('hidden');
             setTimeout(() => projectVideoModal.style.opacity = 1, 10);
-            bodyEl.classList.add('no-scroll'); // 锁定背景滚动
+            bodyEl.classList.add('no-scroll');
         }
 
-        /**
-         * 关闭视频模态框，并停止播放视频。
-         */
-        window.closeVideoModal = function() { // 绑定到 window 以便 HTML 访问
+        window.closeVideoModal = function() {
+            const projectVideoModal = document.getElementById('projectVideoModal');
             projectVideoModal.style.opacity = 0;
             
-            // 清空 iframe，停止视频播放 (关键步骤)
-            videoContainer.innerHTML = '';
+            document.getElementById('videoContainer').innerHTML = '';
             
             setTimeout(() => {
                 projectVideoModal.classList.add('hidden');
-                // 恢复body滚动状态（仅当当前模块内容不需要滚动时）
                 if (document.querySelector('.app-section.active')?.id === 'hero') {
                     bodyEl.classList.remove('no-scroll');
                 }
             }, 300);
         }
 
-        // 监听点击视频模态框外部关闭
-        projectVideoModal.addEventListener('click', (e) => {
-            if (e.target.id === 'projectVideoModal') {
-                closeVideoModal();
+
+        // 以下代码在 DOMContentLoaded 后执行，用于绑定事件监听器
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const themeToggle = document.getElementById('theme-toggle');
+            const themeToggleMobile = document.getElementById('theme-toggle-mobile');
+            const themeIconDesktop = document.getElementById('theme-icon');
+            const themeIconMobile = document.getElementById('theme-icon-mobile');
+            const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+            const filterBtns = document.querySelectorAll('.filter-btn');
+            const projectCards = document.querySelectorAll('.project-card');
+            
+            // 绑定英雄区域按钮事件 (修复核心问题)
+            const btnHeroProjects = document.getElementById('btn-hero-projects');
+            const btnHeroAbout = document.getElementById('btn-hero-about');
+
+            if (btnHeroProjects) {
+                 btnHeroProjects.addEventListener('click', () => {
+                    window.showSection('projects');
+                });
             }
-        });
-
-        // =======================================================
-        // 6. 监听浏览器前进/后退按钮 (Popstate)
-        // =======================================================
-
-        window.addEventListener('popstate', () => {
-            const hash = window.location.hash.replace('#', '');
-            if (hash) {
-                // 如果 hash 存在，切换到对应模块
-                showSection(hash);
-            } else {
-                // 如果 hash 为空，返回英雄区域
-                showSection('hero');
+            if (btnHeroAbout) {
+                btnHeroAbout.addEventListener('click', () => {
+                    window.showSection('about');
+                });
             }
-        });
+
+            // =======================================================
+            // 1. 主题切换功能 (明暗模式)
+            // =======================================================
+
+            /**
+             * 设置主题并更新图标。
+             */
+            function setTheme(theme) {
+                htmlEl.setAttribute('data-theme', theme);
+                localStorage.setItem('theme', theme);
+
+                const isDark = theme === 'dark';
+                const iconTitle = isDark ? 'fas fa-sun' : 'fas fa-moon';
+
+                if (themeIconDesktop) themeIconDesktop.className = iconTitle;
+                if (themeIconMobile) themeIconMobile.className = iconTitle;
+            }
+
+            /**
+             * 切换当前主题。
+             */
+            function toggleTheme() {
+                const currentTheme = htmlEl.getAttribute('data-theme');
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                setTheme(newTheme);
+            }
+
+            // 绑定主题切换事件
+            if (themeToggle) themeToggle.addEventListener('click', toggleTheme);
+            if (themeToggleMobile) themeToggleMobile.addEventListener('click', toggleTheme);
+            
+            /**
+             * 初始化主题：从 localStorage 或系统偏好设置中读取。
+             */
+            function initializeTheme() {
+                const savedTheme = localStorage.getItem('theme');
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                
+                let initialTheme = 'dark'; // 默认设置为暗色主题，符合优雅简约风格
+
+                if (savedTheme) {
+                    initialTheme = savedTheme;
+                } else if (prefersDark) {
+                    initialTheme = 'dark';
+                }
+
+                setTheme(initialTheme);
+            }
+            
+            // =======================================================
+            // 2. 导航栏功能 (移动菜单)
+            // =======================================================
+
+            // 绑定移动菜单按钮事件
+            if (mobileMenuBtn) mobileMenuBtn.addEventListener('click', () => {
+                 mobileMenu.classList.toggle('hidden');
+            });
+            
+            // =======================================================
+            // 3. 辅助函数 (必须在 DOMContentLoaded 内部定义或在外部提升)
+            // =======================================================
+            
+            /**
+             * 页面初始化时检查 URL hash，决定显示哪个模块。
+             */
+            function initializeSection() {
+                const hash = window.location.hash.replace('#', '');
+                const defaultSection = 'hero';
+                let initialSectionId = defaultSection;
+
+                if (hash && document.getElementById(hash)) {
+                    initialSectionId = hash;
+                }
+
+                const appSections = document.querySelectorAll('.app-section'); 
+                appSections.forEach(section => {
+                    section.style.display = 'none';
+                    section.classList.remove('active');
+                });
+
+                const initialSection = document.getElementById(initialSectionId);
+                if (initialSection) {
+                     initialSection.style.display = 'flex';
+                     initialSection.classList.add('active');
+                     updateNavLink(initialSectionId);
+                }
+                
+                if (initialSectionId !== 'hero') {
+                    bodyEl.classList.add('no-scroll');
+                }
+            }
+            
+            // =======================================================
+            // 4. 项目分类过滤功能
+            // =======================================================
+
+            filterBtns.forEach(button => {
+                button.addEventListener('click', () => {
+                    filterBtns.forEach(btn => btn.classList.remove('active'));
+                    button.classList.add('active');
+                    
+                    const filter = button.getAttribute('data-filter');
+
+                    projectCards.forEach(card => {
+                        const category = card.getAttribute('data-category');
+                        
+                        if (filter === 'all' || filter === category) {
+                            card.style.display = 'block';
+                            setTimeout(() => {
+                                 card.style.opacity = '1';
+                                 card.style.transform = 'scale(1)';
+                            }, 50);
+                        } else {
+                            card.style.opacity = '0';
+                            card.style.transform = 'scale(0.9)';
+                            setTimeout(() => {
+                                 card.style.display = 'none';
+                            }, 300);
+                        }
+                    });
+                });
+            });
+            
+            // 初始化时选中“全部”
+            const allFilterBtn = document.querySelector('.filter-btn[data-filter="all"]');
+            if (allFilterBtn) allFilterBtn.click();
+            
+            // =======================================================
+            // 5. 模态框点击外部关闭 (通用和视频)
+            // =======================================================
+
+            document.addEventListener('click', (e) => {
+                if (e.target.id === 'wechatModal' || e.target.id === 'qqModal') {
+                    window.closeModal(e.target.id);
+                }
+            });
+
+            const projectVideoModal = document.getElementById('projectVideoModal');
+            if (projectVideoModal) {
+                 projectVideoModal.addEventListener('click', (e) => {
+                    if (e.target.id === 'projectVideoModal') {
+                        window.closeVideoModal();
+                    }
+                });
+            }
+            
+            // =======================================================
+            // 6. 监听浏览器前进/后退按钮 (Popstate)
+            // =======================================================
+
+            window.addEventListener('popstate', () => {
+                const hash = window.location.hash.replace('#', '');
+                if (hash) {
+                    window.showSection(hash);
+                } else {
+                    window.showSection('hero');
+                }
+            });
 
 
-        // 页面加载完成后执行初始化
-        window.addEventListener('DOMContentLoaded', () => {
+            // 页面加载完成后执行初始化
             initializeTheme();
-            initializeSection(); // 使用新的初始化函数来决定显示哪个模块
+            initializeSection();
         });
         
     </script>
