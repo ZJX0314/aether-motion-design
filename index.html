@@ -257,7 +257,6 @@
         <!-- 优化：在移动端，将 Flex-row 改为 Stacked column -->
         <section id="hero" class="app-section active min-h-screen flex items-center pb-12">
             <!-- 关键修复：确保在桌面端 (md) 也有足够的顶部间距来避开导航栏 (h-16 = 64px) -->
-            <!-- 修复：将 pt-16 md:pt-0 改为 pt-16 md:pt-[64px]，确保内容在垂直居中时不会被导航栏遮挡 -->
             <div class="container flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left pt-16 md:pt-[64px]">
                 <!-- 文字内容 -->
                 <!-- 优化：移除 max-w-xl，让其在移动端占据更多宽度 -->
@@ -269,9 +268,9 @@
                         专注于通过动画、3D 渲染和视觉效果来赋予品牌和故事生命。我坚信运动的力量能创造沉浸式的用户体验。
                     </p>
                     <div class="flex flex-col sm:flex-row justify-center md:justify-start gap-4 pt-4">
-                        <!-- 更改为切换到 projects 模块 -->
+                        <!-- 修复 1: 确保 onclick 准确调用 showSection('projects') -->
                         <button class="btn-primary" onclick="showSection('projects')">观看我的作品集 <i class="fas fa-film ml-2"></i></button>
-                        <!-- 更改为切换到 about 模块 -->
+                        <!-- 修复 2: 确保 onclick 准确调用 showSection('about') -->
                         <button class="btn-primary !bg-transparent border border-var(--color-primary) text-var(--color-primary) hover:!bg-var(--color-primary-dark) hover:!text-white hover:border-transparent" style="color: var(--color-primary); border-color: var(--color-primary);" onmouseover="this.style.setProperty('color', 'white', 'important'); this.style.setProperty('border-color', 'transparent', 'important');" onmouseout="this.style.setProperty('color', 'var(--color-primary)', 'important'); this.style.setProperty('border-color', 'var(--color-primary)', 'important');" onclick="showSection('about')">了解我的故事 <i class="fas fa-user-circle ml-2"></i></button>
                     </div>
                 </div>
@@ -481,29 +480,31 @@
                 <p class="text-center opacity-70 mb-6 sm:mb-8 text-base sm:text-lg">在这里找到我的作品分享和专业动态。</p>
                 <!-- 优化：在移动端使用 2 列布局 -->
                 <div class="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-8">
-                    <!-- 社交媒体卡片 1: ArtStation (动态作品集) -->
+                    <!-- 社交媒体卡片 1: Behance -->
                     <a href="#" target="_blank" class="glass-card p-4 sm:p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-blue-500">
-                        <i class="fab fa-artstation text-3xl sm:text-4xl mb-3" style="color: #053EFF;"></i>
-                        <h4 class="text-base sm:text-xl font-bold mb-1">ArtStation</h4>
-                        <p class="opacity-70 text-sm sm:text-base">高精度动态渲染作品</p>
+                        <i class="fab fa-behance-square text-3xl sm:text-4xl mb-3" style="color: #0057ff;"></i>
+                        <h4 class="text-base sm:text-xl font-bold mb-1">Behance</h4>
+                        <p class="opacity-70 text-sm sm:text-base">专业作品集展示</p>
                     </a>
-                    <!-- 社交媒体卡片 2: Bilibili (Reel & 分享) -->
+                    <!-- 社交媒体卡片 2: Bilibili (哔哩哔哩) -->
+                    <!-- 使用 Font Awesome 的 custom-bilibili 替代，这里使用 fa-bilibili (假设可用) 或 fa-video -->
                     <a href="#" target="_blank" class="glass-card p-4 sm:p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-pink-500">
-                        <i class="fas fa-video text-3xl sm:text-4xl mb-3" style="color: #f06a8f;"></i>
-                        <h4 class="text-base sm:text-xl font-bold mb-1">Bilibili (B站)</h4>
+                        <i class="fas fa-video text-3xl sm:text-4xl mb-3" style="color: #00AEEC;"></i>
+                        <h4 class="text-base sm:text-xl font-bold mb-1">哔哩哔哩 (B站)</h4>
                         <p class="opacity-70 text-sm sm:text-base">动态作品和教程分享</p>
                     </a>
-                    <!-- 社交媒体卡片 3: Vimeo -->
-                    <a href="#" target="_blank" class="glass-card p-4 sm:p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-green-500">
-                        <i class="fab fa-vimeo text-3xl sm:text-4xl mb-3" style="color: #1AB7EA;"></i>
-                        <h4 class="text-base sm:text-xl font-bold mb-1">Vimeo</h4>
-                        <p class="opacity-70 text-sm sm:text-base">高清无损作品展示</p>
+                    <!-- 社交媒体卡片 3: Pinterest -->
+                    <a href="#" target="_blank" class="glass-card p-4 sm:p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-red-500">
+                        <i class="fab fa-pinterest text-3xl sm:text-4xl mb-3" style="color: #E60023;"></i>
+                        <h4 class="text-base sm:text-xl font-bold mb-1">Pinterest</h4>
+                        <p class="opacity-70 text-sm sm:text-base">灵感收集与分享</p>
                     </a>
-                    <!-- 社交媒体卡片 4: 领英 -->
-                    <a href="#" target="_blank" class="glass-card p-4 sm:p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-blue-500">
-                        <i class="fab fa-linkedin text-3xl sm:text-4xl mb-3" style="color: #0A66C2;"></i>
-                        <h4 class="text-base sm:text-xl font-bold mb-1">LinkedIn</h4>
-                        <p class="opacity-70 text-sm sm:text-base">专业履历与合作洽谈</p>
+                    <!-- 社交媒体卡片 4: 站酷 (ZCOOL) -->
+                    <!-- 站酷没有直接的 Font Awesome 图标，使用 fa-pencil-ruler 或 fa-paint-brush 作为替代 -->
+                    <a href="#" target="_blank" class="glass-card p-4 sm:p-6 flex flex-col items-center text-center transition duration-300 hover:shadow-var(--color-primary) shadow-xl border-t-4 border-gray-700 hover:border-yellow-500">
+                        <i class="fas fa-pencil-ruler text-3xl sm:text-4xl mb-3" style="color: #FFC300;"></i>
+                        <h4 class="text-base sm:text-xl font-bold mb-1">站酷 (ZCOOL)</h4>
+                        <p class="opacity-70 text-sm sm:text-base">中文设计社区</p>
                     </a>
                 </div>
             </div>
